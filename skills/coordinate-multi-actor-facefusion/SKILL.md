@@ -5,14 +5,14 @@ description: Coordinate a conversational multi-actor FaceFusion project through 
 
 # Coordinate Multi-Actor Facefusion
 
-Use this skill to run a phased agent workflow for multi-role and multi-face swaps.
+Use this skill to run a phased agent workflow for multi-role FaceFusion projects, including swaps, lip sync, enhancement, cutouts, and other shot-level processor combinations.
 
 ## Workflow
 
 1. Start by reading `../../resources/multi-actor-workflow.md`.
 2. If environment readiness is unknown, call `facefusion_health_check`.
-3. Build or update project cast with `facefusion_define_cast`.
-4. Build or update shot ranges with `facefusion_plan_shots`.
+3. Build or update project cast with `facefusion_define_cast`, including role assets such as source face images or source audio when needed.
+4. Build or update shot ranges and shot-level operations with `facefusion_plan_shots`.
 5. Generate preview and final tasks with `facefusion_build_multi_actor_plan`.
 6. Materialize preview-first work with `facefusion_materialize_multi_actor_jobs`.
 7. After preview review, call `facefusion_approve_preview` instead of editing `plan.json` manually.
@@ -23,6 +23,7 @@ Use this skill to run a phased agent workflow for multi-role and multi-face swap
 - Keep each turn focused on one phase: cast, shots, preview approval, or retry.
 - Ask only the minimum blocking question for the current phase.
 - Prefer named roles and bounded time ranges over low-level FaceFusion flags.
+- For non-swap work, capture the intended shot-level operation explicitly, for example `lip_sync`, `face_enhance`, or `background_remove`.
 - Summarize the current project state after every material change so the user can confirm it.
 - For unclear long videos, offer a shot-planning pass before trying to render.
 - For multi-face same-frame shots, default to preview-first and reference-mode planning.

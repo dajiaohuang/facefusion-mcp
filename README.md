@@ -1,6 +1,6 @@
 # FaceFusion MCP
 
-MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on conversational multi-actor and multi-face orchestration, preview approval, and shot-level retry workflows.
+MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on conversational multi-actor and multi-face orchestration, preview approval, shot-level retry workflows, and confirmation-gated install/setup when FaceFusion is missing.
 
 ## Featured Workflow
 
@@ -8,16 +8,20 @@ FaceFusion MCP is built for more than one-off swaps. Its standout workflow is co
 
 - map multiple source faces to named roles
 - split a target video into shot-level tasks
+- mix shot-level operations such as face swap, lip sync, enhancement, and background removal
 - generate preview tasks before risky final renders
 - approve or reject previews to control final promotion
 - retry only the affected shot instead of rebuilding the entire queue
 
 This makes it practical for an agent to coordinate multi-role, multi-face projects with a `cast -> shots -> preview -> approval -> retry` loop instead of forcing users to hand-author large FaceFusion command lines.
 
+It can also detect when FaceFusion is not installed or not fully set up yet, then propose an install/setup plan and only execute it after explicit confirmation.
+
 ## What It Provides
 
-- `16` executable MCP tools for:
+- `17` executable MCP tools for:
   - health checks
+  - install and setup automation
   - capability discovery
   - model downloads
   - one-off runs
@@ -102,6 +106,7 @@ python .\scripts\server.py --stdio
 ## MCP Tools
 
 - `facefusion_health_check`
+- `facefusion_install_or_setup`
 - `facefusion_list_capabilities`
 - `facefusion_download_models`
 - `facefusion_run_job`

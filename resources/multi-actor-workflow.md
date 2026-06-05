@@ -19,11 +19,12 @@ Represent each editing project as three layers:
 
 1. cast
 - who each role is
-- which source face belongs to that role
+- which source assets belong to that role, such as face images or audio clips
 
 2. shots
 - which time ranges or segments exist
 - which roles appear in each segment
+- which operation each segment needs
 
 3. plan
 - which concrete FaceFusion tasks should run
@@ -63,6 +64,11 @@ Recommended default root:
       "role_id": "hero",
       "role_name": "Hero",
       "source_face_path": "D:/faces/hero.jpg",
+      "source_audio_path": "D:/audio/hero.wav",
+      "source_assets": {
+        "face": "D:/faces/hero.jpg",
+        "audio": "D:/audio/hero.wav"
+      },
       "notes": "main male lead"
     },
     {
@@ -78,8 +84,9 @@ Recommended default root:
 Rules:
 
 - `role_id` must be stable and machine-friendly.
-- `source_face_path` must point to one canonical source face image per role.
-- if the user provides multiple candidate faces for one role, keep one active source and store alternates in `notes` or a future `variants` field.
+- use `source_assets` to carry operation-specific inputs such as `face`, `audio`, `image`, or `video`.
+- `source_face_path` remains the shorthand for the primary face asset when face swap is involved.
+- if the user provides multiple candidate assets for one role, keep one active source and store alternates in `notes` or a future `variants` field.
 
 ## `shots.json` schema
 
@@ -94,6 +101,20 @@ Rules:
       "trim_end": 12.5,
       "roles": [
         "hero"
+      ],
+      "operations": [
+        {
+          "operation_type": "face_swap",
+          "roles": [
+            "hero"
+          ]
+        },
+        {
+          "operation_type": "lip_sync",
+          "roles": [
+            "hero"
+          ]
+        }
       ],
       "preview_required": true,
       "risk_level": "low",
@@ -120,6 +141,7 @@ Rules:
 
 - each shot is a bounded time segment
 - `roles` lists only the roles that must be swapped in that segment
+- `operations[]` can override the default face-swap behavior and describe per-shot actions such as `lip_sync`, `face_enhance`, `background_remove`, or `frame_enhance`
 - multi-role segments default to `preview_required = true`
 - multi-role or crowded segments default to `risk_level = high`
 - when a shot is materialized into a FaceFusion job step, any trim bounds are coerced to integer frame boundaries for CLI compatibility
@@ -134,6 +156,7 @@ Rules:
       "task_id": "preview-s002-hero-villain",
       "task_type": "preview",
       "shot_id": "s002",
+      "operation_type": "face_swap",
       "roles": [
         "hero",
         "villain"
@@ -151,6 +174,7 @@ Rules:
       "task_id": "final-s002-hero-villain",
       "task_type": "final",
       "shot_id": "s002",
+      "operation_type": "face_swap",
       "roles": [
         "hero",
         "villain"
@@ -173,6 +197,7 @@ Rules:
 - every high-risk shot should get a preview task before a final task
 - final tasks remain blocked until preview approval
 - one task may represent one shot with one or more roles if the role mapping can be kept stable
+- operations that need different source asset kinds should become separate tasks
 - if stability is poor, split the shot into finer-grained tasks
 
 ## Agent Conversation Flow
@@ -182,7 +207,7 @@ Rules:
 The agent asks only for role mapping:
 
 - how many target roles need replacement
-- which source face belongs to each role
+- which source assets belong to each role
 - whether any role appears only in limited scenes
 
 Output:
@@ -211,6 +236,7 @@ The agent converts shots into preview tasks:
 - single-role shots may skip preview if the user wants speed
 - multi-role shots should always preview first
 - long shots may be previewed with a shorter internal sample range
+- lip sync usually needs one task per speaking role because it needs one source audio asset
 
 Output:
 
@@ -400,6 +426,27 @@ Defaults:
 - same role mapping logic as final
 
 The preview must validate identity mapping, not cinematic quality.
+
+## Operation Profiles
+
+Supported high-level operation types:
+
+- `face_swap`
+- `lip_sync`
+- `face_enhance`
+- `background_remove`
+- `frame_enhance`
+- `frame_colorize`
+- `expression_restore`
+- `face_edit`
+- `age_modify`
+
+Rules of thumb:
+
+- `face_swap` uses role face assets and supports multi-role reference workflows.
+- `lip_sync` uses role audio assets and should usually stay one speaking role per task.
+- `background_remove`, `frame_enhance`, and `frame_colorize` can run without source assets.
+- processor-specific flags can stay attached to the operation instead of leaking into the whole project.
 
 ## Approval And Retry Loop
 

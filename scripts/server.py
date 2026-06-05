@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import venv
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,75 @@ DEFAULT_COMMANDS = [
     "job-retry",
     "job-retry-all",
 ]
+FACEFUSION_REPO_URL = "https://github.com/facefusion/facefusion.git"
 JOB_STATUSES = ["drafted", "queued", "completed", "failed"]
+MULTI_ACTOR_OPERATION_PROFILES: dict[str, dict[str, Any]] = {
+    "face_swap": {
+        "default_processors": ["face_swapper"],
+        "source_asset_kind": "face",
+        "roles_required": True,
+        "supports_multi_role": True,
+        "preview_default": "shot",
+        "quality_enhancer": "face_enhancer",
+    },
+    "lip_sync": {
+        "default_processors": ["lip_syncer"],
+        "source_asset_kind": "audio",
+        "roles_required": True,
+        "supports_multi_role": False,
+        "preview_default": True,
+        "quality_enhancer": "face_enhancer",
+    },
+    "face_enhance": {
+        "default_processors": ["face_enhancer"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "background_remove": {
+        "default_processors": ["background_remover"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "frame_enhance": {
+        "default_processors": ["frame_enhancer"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "frame_colorize": {
+        "default_processors": ["frame_colorizer"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "expression_restore": {
+        "default_processors": ["expression_restorer"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "face_edit": {
+        "default_processors": ["face_editor"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+    "age_modify": {
+        "default_processors": ["age_modifier"],
+        "source_asset_kind": None,
+        "roles_required": False,
+        "supports_multi_role": True,
+        "preview_default": False,
+    },
+}
 RESOURCE_URIS = {
     "facefusion://reference/commands": RESOURCE_DIR / "commands.md",
     "facefusion://reference/processors": RESOURCE_DIR / "processors.md",
@@ -93,6 +162,16 @@ def _facefusion_root(facefusion_root: str | None = None) -> Path:
     return Path(facefusion_root) if facefusion_root else FACEFUSION_ROOT
 
 
+def _recommended_install_root(facefusion_root: str | None = None) -> Path:
+    if facefusion_root:
+        return Path(facefusion_root)
+    if os.environ.get("FACEFUSION_ROOT"):
+        return Path(os.environ["FACEFUSION_ROOT"])
+    if (FACEFUSION_ROOT / "facefusion.py").exists():
+        return FACEFUSION_ROOT
+    return PLUGIN_ROOT / ".facefusion-runtime"
+
+
 def _multi_actor_projects_root(project_root: str | None = None, facefusion_root: str | None = None) -> Path:
     if project_root:
         return Path(project_root)
@@ -121,15 +200,39 @@ def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
-def _run_subprocess(command: list[str], cwd: Path) -> dict[str, Any]:
-    completed = subprocess.run(
-        command,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+def _run_subprocess(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 127,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+        }
+    except OSError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 1,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+        }
     return {
         "command": command,
         "cwd": str(cwd),
@@ -198,6 +301,12 @@ def _append_flat_options(args: list[str], values: dict[str, Any] | None, rename:
         _bool_to_flag(args, flag, value)
 
 
+def _flat_options_to_args(values: dict[str, Any] | None, rename: dict[str, str] | None = None) -> list[str]:
+    args: list[str] = []
+    _append_flat_options(args, values, rename=rename)
+    return args
+
+
 def _parse_json_stdout(result: dict[str, Any], fallback: Any) -> Any:
     if not result["success"]:
         return fallback
@@ -230,6 +339,30 @@ def _models_summary(facefusion_root: str | None = None) -> dict[str, Any]:
         "total_files": total,
         "by_extension": by_extension,
     }
+
+
+def _command_available(command: str, cwd: Path | None = None) -> dict[str, Any]:
+    return _run_subprocess([command, "--version"], cwd=cwd or PLUGIN_ROOT)
+
+
+def _venv_paths(install_root: Path) -> dict[str, Path]:
+    venv_root = install_root / ".venv"
+    scripts_dir = venv_root / "Scripts"
+    return {
+        "venv_root": venv_root,
+        "scripts_dir": scripts_dir,
+        "python": scripts_dir / "python.exe",
+        "pip": scripts_dir / "pip.exe",
+    }
+
+
+def _venv_env(install_root: Path) -> dict[str, str]:
+    paths = _venv_paths(install_root)
+    env = os.environ.copy()
+    existing_path = env.get("PATH", "")
+    env["PATH"] = str(paths["scripts_dir"]) + (os.pathsep + existing_path if existing_path else "")
+    env["VIRTUAL_ENV"] = str(paths["venv_root"])
+    return env
 
 
 def _available_processors(facefusion_root: str | None = None) -> list[str]:
@@ -350,15 +483,88 @@ def _ensure_output_allowed(output_path: str, output_options: dict[str, Any] | No
 
 
 def _normalize_role(role: dict[str, Any]) -> dict[str, Any]:
-    source_face_path = role["source_face_path"]
-    _require_existing_file(source_face_path, "role.source_face_path")
-    role_id = role.get("role_id") or _slugify(role.get("role_name") or Path(source_face_path).stem)
-    return {
+    source_assets = dict(role.get("source_assets") or {})
+    if role.get("source_face_path"):
+        source_assets["face"] = role["source_face_path"]
+    if role.get("source_audio_path"):
+        source_assets["audio"] = role["source_audio_path"]
+    if role.get("source_image_path"):
+        source_assets["image"] = role["source_image_path"]
+    if role.get("source_video_path"):
+        source_assets["video"] = role["source_video_path"]
+    if not source_assets:
+        raise ValueError("role must include at least one source asset")
+    for asset_kind, asset_path in source_assets.items():
+        _require_existing_file(asset_path, f"role.source_assets[{asset_kind}]")
+    primary_asset = source_assets.get("face") or next(iter(source_assets.values()))
+    role_id = role.get("role_id") or _slugify(role.get("role_name") or Path(primary_asset).stem)
+    normalized = {
         "role_id": role_id,
         "role_name": role.get("role_name") or role_id,
-        "source_face_path": source_face_path,
+        "source_face_path": source_assets.get("face"),
+        "source_audio_path": source_assets.get("audio"),
+        "source_assets": source_assets,
         "notes": role.get("notes", ""),
     }
+    if role.get("source_image_path"):
+        normalized["source_image_path"] = source_assets.get("image")
+    if role.get("source_video_path"):
+        normalized["source_video_path"] = source_assets.get("video")
+    return normalized
+
+
+def _normalize_operation(
+    index: int,
+    operation: dict[str, Any],
+    shot_roles: list[str],
+    shot_preview_required: bool,
+    shot_risk_level: str,
+) -> dict[str, Any]:
+    operation_type = operation.get("operation_type") or "face_swap"
+    if operation_type not in MULTI_ACTOR_OPERATION_PROFILES:
+        raise ValueError(f"Unsupported operation_type: {operation_type}")
+    profile = MULTI_ACTOR_OPERATION_PROFILES[operation_type]
+    if "roles" in operation:
+        roles = list(operation.get("roles") or [])
+    elif profile["roles_required"]:
+        roles = list(shot_roles)
+    else:
+        roles = []
+    if profile["roles_required"] and not roles and not operation.get("source_paths_override"):
+        raise ValueError(f"operation_type '{operation_type}' requires at least one role or source_paths_override")
+    if not profile.get("supports_multi_role", True) and len(roles) > 1:
+        raise ValueError(f"operation_type '{operation_type}' does not support multiple roles in one task")
+    preview_required = operation.get("preview_required")
+    if preview_required is None:
+        preview_default = profile.get("preview_default")
+        if isinstance(preview_default, bool):
+            preview_required = preview_default
+        else:
+            preview_required = shot_preview_required
+    operation_id = operation.get("operation_id")
+    if not operation_id:
+        role_suffix = "-".join(roles) if roles else "global"
+        operation_id = f"{index:02d}-{_slugify(operation_type)}-{role_suffix}"
+    normalized = {
+        "operation_id": operation_id,
+        "operation_type": operation_type,
+        "roles": roles,
+        "processors": operation.get("processors"),
+        "source_asset_kind": operation.get("source_asset_kind") or profile.get("source_asset_kind"),
+        "source_paths_override": operation.get("source_paths_override"),
+        "processor_options": operation.get("processor_options") or {},
+        "face_options": operation.get("face_options") or {},
+        "output_options": operation.get("output_options") or {},
+        "misc_options": operation.get("misc_options") or {},
+        "extra_args": operation.get("extra_args") or [],
+        "preview_required": bool(preview_required),
+        "risk_level": operation.get("risk_level") or shot_risk_level,
+        "notes": operation.get("notes", ""),
+    }
+    if normalized["source_paths_override"]:
+        for source_index, source_path in enumerate(normalized["source_paths_override"], start=1):
+            _require_existing_file(source_path, f"operation.source_paths_override[{source_index}]")
+    return normalized
 
 
 def _normalize_shot(index: int, shot: dict[str, Any], auto_preview_policy: str) -> dict[str, Any]:
@@ -392,13 +598,30 @@ def _normalize_shot(index: int, shot: dict[str, Any], auto_preview_policy: str) 
         "risk_level": risk_level,
         "notes": shot.get("notes", ""),
     }
+    operations = shot.get("operations")
+    if operations:
+        normalized["operations"] = [
+            _normalize_operation(operation_index, operation, roles, bool(preview_required), risk_level)
+            for operation_index, operation in enumerate(operations, start=1)
+        ]
+    else:
+        normalized["operations"] = [
+            _normalize_operation(
+                1,
+                {"operation_type": "face_swap", "roles": roles, "preview_required": preview_required},
+                roles,
+                bool(preview_required),
+                risk_level,
+            )
+        ]
     _require_existing_file(normalized["target_path"], "shot.target_path")
     return normalized
 
 
-def _task_output_path(project_dir: Path, task_type: str, shot_id: str) -> str:
+def _task_output_path(project_dir: Path, task_type: str, shot_id: str, operation_id: str, operation_type: str, target_path: str) -> str:
     folder = "previews" if task_type == "preview" else "renders"
-    return str(project_dir / folder / f"{shot_id}-{task_type}.mp4")
+    suffix = Path(target_path).suffix or ".mp4"
+    return str(project_dir / folder / f"{shot_id}-{_slugify(operation_id)}-{_slugify(operation_type)}-{task_type}{suffix}")
 
 
 def _coerce_frame_bound(value: Any) -> int:
@@ -417,8 +640,17 @@ def _build_task_step_request(
     roles_by_id: dict[str, dict[str, Any]],
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    source_paths = [roles_by_id[role_id]["source_face_path"] for role_id in task["roles"]]
-    face_options: dict[str, Any] = {}
+    source_paths = list(task.get("source_paths") or [])
+    if not source_paths:
+        source_asset_kind = task.get("source_asset_kind")
+        if source_asset_kind:
+            for role_id in task["roles"]:
+                role = roles_by_id[role_id]
+                source_asset_path = (role.get("source_assets") or {}).get(source_asset_kind)
+                if not source_asset_path:
+                    raise ValueError(f"Role '{role_id}' is missing source asset kind '{source_asset_kind}'")
+                source_paths.append(source_asset_path)
+    face_options: dict[str, Any] = dict(task.get("face_options") or {})
     if task["mode"] == "reference":
         face_options["face_selector_mode"] = "reference"
     if shot.get("trim_start") is not None:
@@ -429,6 +661,8 @@ def _build_task_step_request(
         face_options["trim_frame_start"] = _coerce_frame_bound(shot["frame_start"])
     if shot.get("frame_end") is not None:
         face_options["trim_frame_end"] = _coerce_frame_bound(shot["frame_end"])
+    extra_args = list(task.get("extra_args") or [])
+    extra_args.extend(_flat_options_to_args(task.get("processor_options")))
     return {
         "source_paths": source_paths,
         "target_path": shot["target_path"],
@@ -436,6 +670,7 @@ def _build_task_step_request(
         "processors": task["processors"],
         "output_options": {"overwrite": overwrite},
         "face_options": face_options,
+        "extra_args": extra_args,
     }
 
 
@@ -466,37 +701,64 @@ def facefusion_health_check(
 ) -> dict[str, Any]:
     root = _facefusion_root(facefusion_root)
     python_exe = _facefusion_python(facefusion_root, python_path)
-    ffmpeg_check = _run_subprocess(["ffmpeg", "-version"], cwd=root)
+    git_check = _command_available("git", cwd=PLUGIN_ROOT)
+    ffmpeg_check = _run_subprocess(["ffmpeg", "-version"], cwd=root if root.exists() else PLUGIN_ROOT)
     version_check = _run_facefusion_command(["-v"], facefusion_root=facefusion_root, python_path=python_path)
     providers = _available_providers(facefusion_root=facefusion_root, python_path=python_path)
     models = _models_summary(facefusion_root=facefusion_root) if include_models else None
+    entrypoint_exists = (root / "facefusion.py").exists()
+    python_exists = python_exe.exists()
+    needs_install = not entrypoint_exists
+    needs_setup = entrypoint_exists and not python_exists
     ready = all(
         [
             root.exists(),
-            python_exe.exists(),
-            (root / "facefusion.py").exists(),
+            python_exists,
+            entrypoint_exists,
             ffmpeg_check["success"],
             version_check["success"],
         ]
     )
+    missing_components = []
+    if not root.exists():
+        missing_components.append("facefusion_root")
+    if not entrypoint_exists:
+        missing_components.append("facefusion_checkout")
+    if not python_exists:
+        missing_components.append("facefusion_venv")
+    if not ffmpeg_check["success"]:
+        missing_components.append("ffmpeg")
+    install_recommendation = "ready"
+    if needs_install or needs_setup:
+        install_recommendation = "install_or_setup_facefusion"
+    elif not ffmpeg_check["success"]:
+        install_recommendation = "install_ffmpeg_manually"
     return {
         "facefusion_root": str(root),
         "python_path": str(python_exe),
         "facefusion_version": version_check["stdout"].strip(),
+        "git_available": git_check["success"],
         "ffmpeg_available": ffmpeg_check["success"],
         "ffmpeg_summary": ffmpeg_check["stdout_summary"],
         "execution_providers": providers,
         "paths": {
             "facefusion_root_exists": root.exists(),
-            "python_exists": python_exe.exists(),
-            "entrypoint_exists": (root / "facefusion.py").exists(),
+            "python_exists": python_exists,
+            "entrypoint_exists": entrypoint_exists,
             "models_dir_exists": (root / ".assets" / "models").exists(),
         },
         "models": models,
         "can_run": ready,
+        "needs_install": needs_install,
+        "needs_setup": needs_setup,
+        "missing_components": missing_components,
+        "suggested_install_root": str(_recommended_install_root(facefusion_root)),
+        "can_auto_install_or_setup": git_check["success"],
+        "install_recommendation": install_recommendation,
         "checks": {
             "version_command": version_check,
             "ffmpeg_command": ffmpeg_check,
+            "git_command": git_check,
         },
     }
 
@@ -537,6 +799,147 @@ def facefusion_download_models(
         "scope": scope,
         "download_providers": download_providers or [],
         "models": _models_summary(facefusion_root=facefusion_root),
+    }
+
+
+@mcp.tool(description="Install or set up a local FaceFusion checkout after explicit confirmation.", structured_output=True)
+def facefusion_install_or_setup(
+    confirmed: bool,
+    install_root: str | None = None,
+    repo_url: str = FACEFUSION_REPO_URL,
+    ref: str | None = None,
+    onnxruntime_variant: str = "cuda",
+    force_reinstall: bool = False,
+    preload_models: bool = False,
+    model_scope: str = "lite",
+) -> dict[str, Any]:
+    target_root = _recommended_install_root(install_root)
+    venv_info = _venv_paths(target_root)
+    plan = {
+        "install_root": str(target_root),
+        "repo_url": repo_url,
+        "ref": ref,
+        "onnxruntime_variant": onnxruntime_variant,
+        "force_reinstall": force_reinstall,
+        "preload_models": preload_models,
+        "model_scope": model_scope,
+        "steps": [
+            "clone_or_reuse_checkout",
+            "create_or_reuse_venv",
+            "upgrade_pip",
+            "run_facefusion_installer",
+            "optional_model_preload",
+        ],
+    }
+    if not confirmed:
+        return {
+            "confirmed": False,
+            "performed": False,
+            "message": "Confirmation required before installation or setup changes are made.",
+            "plan": plan,
+        }
+
+    git_check = _command_available("git", cwd=PLUGIN_ROOT)
+    if not git_check["success"]:
+        return {
+            "confirmed": True,
+            "performed": False,
+            "message": "git is required to clone or update FaceFusion.",
+            "plan": plan,
+            "git_check": git_check,
+        }
+
+    commands_run: list[dict[str, Any]] = []
+    _ensure_directory(target_root.parent)
+    checkout_exists = (target_root / "facefusion.py").exists()
+    if not checkout_exists:
+        clone_args = ["git", "clone", repo_url, str(target_root)]
+        if ref:
+            clone_args = ["git", "clone", "--branch", ref, repo_url, str(target_root)]
+        clone_result = _run_subprocess(clone_args, cwd=target_root.parent)
+        commands_run.append({"step": "clone_checkout", "result": clone_result})
+        if not clone_result["success"]:
+            return {
+                "confirmed": True,
+                "performed": False,
+                "plan": plan,
+                "commands_run": commands_run,
+                "health_check": facefusion_health_check(facefusion_root=str(target_root), include_models=False),
+            }
+    elif ref:
+        checkout_ref_result = _run_subprocess(["git", "checkout", ref], cwd=target_root)
+        commands_run.append({"step": "checkout_ref", "result": checkout_ref_result})
+        if not checkout_ref_result["success"]:
+            return {
+                "confirmed": True,
+                "performed": False,
+                "plan": plan,
+                "commands_run": commands_run,
+                "health_check": facefusion_health_check(facefusion_root=str(target_root), include_models=False),
+            }
+
+    if not venv_info["python"].exists():
+        _ensure_directory(target_root)
+        venv.create(str(venv_info["venv_root"]), with_pip=True)
+        commands_run.append(
+            {
+                "step": "create_venv",
+                "result": {
+                    "command": [sys.executable, "-m", "venv", str(venv_info["venv_root"])],
+                    "cwd": str(target_root),
+                    "return_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "stdout_summary": "",
+                    "stderr_summary": "",
+                    "success": True,
+                },
+            }
+        )
+
+    venv_env = _venv_env(target_root)
+    pip_upgrade = _run_subprocess([str(venv_info["python"]), "-m", "pip", "install", "--upgrade", "pip"], cwd=target_root, env=venv_env)
+    commands_run.append({"step": "upgrade_pip", "result": pip_upgrade})
+    if not pip_upgrade["success"]:
+        return {
+            "confirmed": True,
+            "performed": False,
+            "plan": plan,
+            "commands_run": commands_run,
+            "health_check": facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]), include_models=False),
+        }
+
+    install_args = [str(venv_info["python"]), "install.py", "--onnxruntime", onnxruntime_variant, "--skip-conda"]
+    if force_reinstall:
+        install_args.append("--force-reinstall")
+    install_result = _run_subprocess(install_args, cwd=target_root, env=venv_env)
+    commands_run.append({"step": "install_dependencies", "result": install_result})
+    if not install_result["success"]:
+        return {
+            "confirmed": True,
+            "performed": False,
+            "plan": plan,
+            "commands_run": commands_run,
+            "health_check": facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]), include_models=False),
+        }
+
+    if preload_models:
+        preload_result = _run_subprocess(
+            [str(venv_info["python"]), "facefusion.py", "force-download", "--download-scope", model_scope, "--log-level", "info"],
+            cwd=target_root,
+            env=venv_env,
+        )
+        commands_run.append({"step": "preload_models", "result": preload_result})
+
+    post_health = facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]))
+    return {
+        "confirmed": True,
+        "performed": True,
+        "plan": plan,
+        "commands_run": commands_run,
+        "facefusion_root": str(target_root),
+        "python_path": str(venv_info["python"]),
+        "health_check": post_health,
     }
 
 
@@ -740,9 +1143,11 @@ def facefusion_update_job_steps(
         target_path = step_request.get("target_path")
         output_path = step_request.get("output_path")
         if action != "remix":
-            if not source_paths or not target_path or not output_path:
-                raise ValueError("step_request must include source_paths, target_path, and output_path")
-            args.extend(["-s", *source_paths, "-t", target_path, "-o", output_path])
+            if not target_path or not output_path:
+                raise ValueError("step_request must include target_path and output_path")
+            if source_paths:
+                args.extend(["-s", *source_paths])
+            args.extend(["-t", target_path, "-o", output_path])
         else:
             if source_paths:
                 args.extend(["-s", *source_paths])
@@ -965,46 +1370,63 @@ def facefusion_build_multi_actor_plan(
         missing_roles = [role_id for role_id in shot["roles"] if role_id not in role_ids]
         if missing_roles:
             raise ValueError(f"Shot {shot['shot_id']} references unknown roles: {missing_roles}")
-        processors = ["face_swapper"]
-        if quality_profile in {"balanced", "quality"}:
-            processors.append("face_enhancer")
-        preview_required = bool(shot["preview_required"])
-        if preview_mode == "always":
-            preview_required = True
-        if preview_mode == "never":
-            preview_required = False
-        execution_provider = "cuda"
-        if preview_required:
-            tasks.append(
-                {
-                    "task_id": f"preview-{shot['shot_id']}",
-                    "task_type": "preview",
-                    "shot_id": shot["shot_id"],
-                    "roles": shot["roles"],
-                    "mode": "reference" if len(shot["roles"]) > 1 else "standard",
-                    "status": "planned",
-                    "output_path": _task_output_path(project_dir, "preview", shot["shot_id"]),
-                    "processors": processors,
-                    "execution_provider": execution_provider,
-                    "quality_profile": "preview",
-                    "risk_level": shot["risk_level"],
-                }
-            )
-        tasks.append(
-            {
-                "task_id": f"final-{shot['shot_id']}",
-                "task_type": "final",
+        for operation in shot["operations"]:
+            missing_operation_roles = [role_id for role_id in operation["roles"] if role_id not in role_ids]
+            if missing_operation_roles:
+                raise ValueError(f"Shot {shot['shot_id']} operation references unknown roles: {missing_operation_roles}")
+            profile = MULTI_ACTOR_OPERATION_PROFILES[operation["operation_type"]]
+            processors = list(operation.get("processors") or profile["default_processors"])
+            enhancer = profile.get("quality_enhancer")
+            if enhancer and quality_profile in {"balanced", "quality"} and enhancer not in processors:
+                processors.append(enhancer)
+            preview_required = bool(operation["preview_required"])
+            if preview_mode == "always":
+                preview_required = True
+            if preview_mode == "never":
+                preview_required = False
+            execution_provider = "cuda"
+            mode = "reference" if len(operation["roles"]) > 1 and operation["operation_type"] in {"face_swap", "lip_sync"} else "standard"
+            task_common = {
                 "shot_id": shot["shot_id"],
-                "roles": shot["roles"],
-                "mode": "reference" if len(shot["roles"]) > 1 else "standard",
-                "status": "blocked_on_preview" if preview_required else "planned",
-                "output_path": _task_output_path(project_dir, "final", shot["shot_id"]),
+                "operation_id": operation["operation_id"],
+                "operation_type": operation["operation_type"],
+                "roles": operation["roles"],
+                "mode": mode,
                 "processors": processors,
                 "execution_provider": execution_provider,
-                "quality_profile": quality_profile,
-                "risk_level": shot["risk_level"],
+                "risk_level": operation["risk_level"],
+                "source_asset_kind": operation.get("source_asset_kind"),
+                "source_paths": operation.get("source_paths_override") or [],
+                "processor_options": operation.get("processor_options") or {},
+                "face_options": operation.get("face_options") or {},
+                "output_options": operation.get("output_options") or {},
+                "misc_options": operation.get("misc_options") or {},
+                "extra_args": operation.get("extra_args") or [],
+                "notes": operation.get("notes", ""),
             }
-        )
+            role_suffix = "-".join(operation["roles"]) if operation["roles"] else "global"
+            operation_slug = _slugify(operation["operation_type"])
+            if preview_required:
+                tasks.append(
+                    {
+                        **task_common,
+                        "task_id": f"preview-{shot['shot_id']}-{operation_slug}-{role_suffix}",
+                        "task_type": "preview",
+                        "status": "planned",
+                        "output_path": _task_output_path(project_dir, "preview", shot["shot_id"], operation["operation_id"], operation["operation_type"], shot["target_path"]),
+                        "quality_profile": "preview",
+                    }
+                )
+            tasks.append(
+                {
+                    **task_common,
+                    "task_id": f"final-{shot['shot_id']}-{operation_slug}-{role_suffix}",
+                    "task_type": "final",
+                    "status": "blocked_on_preview" if preview_required else "planned",
+                    "output_path": _task_output_path(project_dir, "final", shot["shot_id"], operation["operation_id"], operation["operation_type"], shot["target_path"]),
+                    "quality_profile": quality_profile,
+                }
+            )
     payload = {
         "project_id": project_id,
         "preview_mode": preview_mode,
@@ -1138,6 +1560,13 @@ def facefusion_approve_preview(
             raise ValueError("task_id must reference a preview task")
         preview_task = candidate
     else:
+        preview_matches = [
+            task
+            for task in plan["tasks"]
+            if task["task_type"] == "preview" and task["shot_id"] == shot_id
+        ]
+        if len(preview_matches) > 1:
+            raise ValueError(f"Multiple preview tasks found for shot_id '{shot_id}'. Use task_id instead.")
         for task in plan["tasks"]:
             if task["task_type"] == "preview" and task["shot_id"] == shot_id:
                 preview_task = task
@@ -1147,7 +1576,9 @@ def facefusion_approve_preview(
     matching_final_tasks = [
         task
         for task in plan["tasks"]
-        if task["task_type"] == "final" and task["shot_id"] == preview_task["shot_id"]
+        if task["task_type"] == "final"
+        and task["shot_id"] == preview_task["shot_id"]
+        and task.get("operation_id") == preview_task.get("operation_id")
     ]
     if approved:
         _set_task_status(preview_task, "approved", note=approval_notes or "Preview approved.")
@@ -1308,6 +1739,7 @@ def prompt_prepare_facefusion_environment() -> str:
     return (
         "Prepare the local FaceFusion environment. "
         "Start with facefusion_health_check. "
+        "If FaceFusion is missing or not fully set up, explain the missing components and ask for explicit confirmation before calling facefusion_install_or_setup. "
         "If the user asks what is available, call facefusion_list_capabilities. "
         "If models are missing or the user wants a preload, call facefusion_download_models. "
         "If the user asks about performance or provider choice, call facefusion_benchmark. "

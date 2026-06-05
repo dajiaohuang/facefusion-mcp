@@ -37,6 +37,7 @@ Ask for:
 
 - which time ranges or segments need swaps
 - which roles appear in each segment
+- which operation each segment needs, such as face swap, lip sync, enhancement, or background removal
 - whether any segment is crowded or risky
 
 Good prompt shape:
@@ -45,7 +46,7 @@ Good prompt shape:
 
 Completion signal:
 
-- each shot has `shot_id`, target path, and roles
+- each shot has `shot_id`, target path, and either default face-swap behavior or explicit `operations[]`
 
 ## Phase 3: Plan
 
@@ -54,6 +55,8 @@ Default policy:
 - single-role stable shots can move faster
 - multi-role shots should preview first
 - crowded same-frame shots should stay isolated
+- lip sync should usually bind one role to one source audio asset per task
+- global processors like background removal or frame enhancement can stay role-free
 
 What to tell the user:
 
