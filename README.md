@@ -1,6 +1,18 @@
 # FaceFusion MCP
 
-MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts.
+MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on conversational multi-actor and multi-face orchestration, preview approval, and shot-level retry workflows.
+
+## Featured Workflow
+
+FaceFusion MCP is built for more than one-off swaps. Its standout workflow is conversational multi-actor orchestration:
+
+- map multiple source faces to named roles
+- split a target video into shot-level tasks
+- generate preview tasks before risky final renders
+- approve or reject previews to control final promotion
+- retry only the affected shot instead of rebuilding the entire queue
+
+This makes it practical for an agent to coordinate multi-role, multi-face projects with a `cast -> shots -> preview -> approval -> retry` loop instead of forcing users to hand-author large FaceFusion command lines.
 
 ## What It Provides
 
@@ -52,6 +64,8 @@ skills/
 - `orchestrate-facefusion-jobs`
 - `diagnose-facefusion-failure`
 - `coordinate-multi-actor-facefusion`
+
+The `coordinate-multi-actor-facefusion` skill is the main entrypoint for the multi-actor workflow above.
 
 ## Requirements
 
