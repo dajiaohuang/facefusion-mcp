@@ -45,7 +45,7 @@ RESOURCE_URIS = {
 }
 
 mcp = FastMCP(
-    name="FaceFusion Local MCP",
+    name="FaceFusion MCP",
     instructions=(
         "Use this server to run the local FaceFusion installation, inspect its capabilities, "
         "read stable references, and render workflow prompts for local media processing."

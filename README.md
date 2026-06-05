@@ -1,6 +1,6 @@
-# FaceFusion Local MCP
+# FaceFusion MCP
 
-Local MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts.
+MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts.
 
 ## What It Provides
 
