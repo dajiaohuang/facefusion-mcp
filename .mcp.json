@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "facefusion": {
+      "title": "FaceFusion Local MCP",
+      "description": "Run local FaceFusion CLI workflows, inspect capabilities, read references, and render workflow prompts.",
+      "cwd": ".",
+      "command": "python",
+      "args": [
+        "./scripts/server.py",
+        "--stdio"
+      ]
+    }
+  }
+}

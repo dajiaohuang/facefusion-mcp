@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate FaceFusion Jobs"
+  short_description: "Build and run FaceFusion job queues"
+  default_prompt: "Create and run a FaceFusion job workflow"

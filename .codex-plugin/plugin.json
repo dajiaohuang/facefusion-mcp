@@ -1,0 +1,26 @@
+{
+  "name": "facefusion-local",
+  "version": "0.1.0",
+  "description": "Run local FaceFusion workflows through MCP tools, resources, and prompts.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "FaceFusion Local",
+    "shortDescription": "Drive FaceFusion from Codex on this machine.",
+    "longDescription": "FaceFusion Local exposes the local FaceFusion installation as an MCP server with executable tools, stable reference resources, and workflow prompts for environment prep, media processing, job orchestration, and troubleshooting.",
+    "developerName": "Local developer",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Check whether my local FaceFusion install is ready to run.",
+      "Run a FaceFusion face swap on local media files.",
+      "Create and manage a FaceFusion batch job workflow."
+    ]
+  }
+}

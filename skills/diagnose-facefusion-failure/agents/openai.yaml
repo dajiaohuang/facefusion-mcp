@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose FaceFusion Failures"
+  short_description: "Troubleshoot FaceFusion task failures"
+  default_prompt: "Diagnose a FaceFusion failure and suggest a fix"

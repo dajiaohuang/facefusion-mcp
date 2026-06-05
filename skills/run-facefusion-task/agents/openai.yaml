@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run FaceFusion"
+  short_description: "Execute FaceFusion processing jobs"
+  default_prompt: "Run a FaceFusion task on local media"

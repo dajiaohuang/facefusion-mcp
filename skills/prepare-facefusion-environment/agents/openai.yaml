@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare FaceFusion"
+  short_description: "Check environment and download models"
+  default_prompt: "Prepare the local FaceFusion environment"
