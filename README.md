@@ -4,7 +4,7 @@ MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/
 
 ## What It Provides
 
-- `10` executable MCP tools for:
+- `16` executable MCP tools for:
   - health checks
   - capability discovery
   - model downloads
@@ -15,13 +15,20 @@ MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/
   - job step updates
   - job execution
   - job management
-- `6` reference resources for:
+  - multi-actor cast definition
+  - multi-actor shot planning
+  - multi-actor plan building
+  - multi-actor job materialization
+  - preview approval
+  - failed task retry
+- `7` reference resources for:
   - commands
   - processors
   - execution providers
   - parameter mapping
   - common workflows
   - troubleshooting
+  - multi-actor workflow
 - `4` prompts for:
   - direct task execution
   - environment preparation
@@ -37,6 +44,14 @@ resources/
 scripts/server.py
 skills/
 ```
+
+## Included Skills
+
+- `run-facefusion-task`
+- `prepare-facefusion-environment`
+- `orchestrate-facefusion-jobs`
+- `diagnose-facefusion-failure`
+- `coordinate-multi-actor-facefusion`
 
 ## Requirements
 
@@ -82,6 +97,12 @@ python .\scripts\server.py --stdio
 - `facefusion_update_job_steps`
 - `facefusion_run_jobs`
 - `facefusion_manage_jobs`
+- `facefusion_define_cast`
+- `facefusion_plan_shots`
+- `facefusion_build_multi_actor_plan`
+- `facefusion_materialize_multi_actor_jobs`
+- `facefusion_approve_preview`
+- `facefusion_retry_failed_task`
 
 ## Resources
 
@@ -91,6 +112,7 @@ python .\scripts\server.py --stdio
 - `facefusion://reference/parameter-mapping`
 - `facefusion://recipes/common-workflows`
 - `facefusion://reference/troubleshooting`
+- `facefusion://recipes/multi-actor-workflow`
 
 ## Prompts
 

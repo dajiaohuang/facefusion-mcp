@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ RESOURCE_URIS = {
     "facefusion://reference/parameter-mapping": RESOURCE_DIR / "parameter-mapping.md",
     "facefusion://recipes/common-workflows": RESOURCE_DIR / "common-workflows.md",
     "facefusion://reference/troubleshooting": RESOURCE_DIR / "troubleshooting.md",
+    "facefusion://recipes/multi-actor-workflow": RESOURCE_DIR / "multi-actor-workflow.md",
 }
 
 mcp = FastMCP(
@@ -89,6 +91,34 @@ def _facefusion_python(facefusion_root: str | None = None, python_path: str | No
 
 def _facefusion_root(facefusion_root: str | None = None) -> Path:
     return Path(facefusion_root) if facefusion_root else FACEFUSION_ROOT
+
+
+def _multi_actor_projects_root(project_root: str | None = None, facefusion_root: str | None = None) -> Path:
+    if project_root:
+        return Path(project_root)
+    return _facefusion_root(facefusion_root) / ".multi-actor-projects"
+
+
+def _project_dir(project_id: str, project_root: str | None = None, facefusion_root: str | None = None) -> Path:
+    return _multi_actor_projects_root(project_root=project_root, facefusion_root=facefusion_root) / project_id
+
+
+def _ensure_directory(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    _ensure_directory(path.parent)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
 def _run_subprocess(command: list[str], cwd: Path) -> dict[str, Any]:
@@ -254,13 +284,14 @@ def _build_common_run_args(
     extra_args: list[str] | None,
     facefusion_root: str | None = None,
     python_path: str | None = None,
+    include_default_execution: bool = True,
 ) -> list[str]:
     args: list[str] = []
     if processors:
         args.extend(["--processors", *processors])
 
     normalized_execution = dict(execution or {})
-    if "providers" not in normalized_execution or not normalized_execution["providers"]:
+    if include_default_execution and ("providers" not in normalized_execution or not normalized_execution["providers"]):
         normalized_execution["providers"] = _default_provider(facefusion_root=facefusion_root, python_path=python_path)
     execution_rename = {
         "providers": "execution_providers",
@@ -316,6 +347,115 @@ def _ensure_output_allowed(output_path: str, output_options: dict[str, Any] | No
     overwrite = bool((output_options or {}).get("overwrite"))
     if Path(output_path).exists() and not overwrite:
         raise ValueError(f"output_path already exists and overwrite is false: {output_path}")
+
+
+def _normalize_role(role: dict[str, Any]) -> dict[str, Any]:
+    source_face_path = role["source_face_path"]
+    _require_existing_file(source_face_path, "role.source_face_path")
+    role_id = role.get("role_id") or _slugify(role.get("role_name") or Path(source_face_path).stem)
+    return {
+        "role_id": role_id,
+        "role_name": role.get("role_name") or role_id,
+        "source_face_path": source_face_path,
+        "notes": role.get("notes", ""),
+    }
+
+
+def _normalize_shot(index: int, shot: dict[str, Any], auto_preview_policy: str) -> dict[str, Any]:
+    roles = shot.get("roles") or []
+    risk_level = shot.get("risk_level")
+    if not risk_level:
+        if len(roles) > 1:
+            risk_level = "high"
+        elif len(roles) == 1:
+            risk_level = "low"
+        else:
+            risk_level = "medium"
+    preview_required = shot.get("preview_required")
+    if preview_required is None:
+        if auto_preview_policy == "always":
+            preview_required = True
+        elif auto_preview_policy == "never":
+            preview_required = False
+        else:
+            preview_required = risk_level in {"medium", "high"} or len(roles) > 1
+    shot_id = shot.get("shot_id") or f"s{index:03d}"
+    normalized = {
+        "shot_id": shot_id,
+        "target_path": shot["target_path"],
+        "trim_start": shot.get("trim_start"),
+        "trim_end": shot.get("trim_end"),
+        "frame_start": shot.get("frame_start"),
+        "frame_end": shot.get("frame_end"),
+        "roles": roles,
+        "preview_required": bool(preview_required),
+        "risk_level": risk_level,
+        "notes": shot.get("notes", ""),
+    }
+    _require_existing_file(normalized["target_path"], "shot.target_path")
+    return normalized
+
+
+def _task_output_path(project_dir: Path, task_type: str, shot_id: str) -> str:
+    folder = "previews" if task_type == "preview" else "renders"
+    return str(project_dir / folder / f"{shot_id}-{task_type}.mp4")
+
+
+def _coerce_frame_bound(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("Frame bounds cannot be boolean values")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return int(float(str(value)))
+
+
+def _build_task_step_request(
+    task: dict[str, Any],
+    shot: dict[str, Any],
+    roles_by_id: dict[str, dict[str, Any]],
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    source_paths = [roles_by_id[role_id]["source_face_path"] for role_id in task["roles"]]
+    face_options: dict[str, Any] = {}
+    if task["mode"] == "reference":
+        face_options["face_selector_mode"] = "reference"
+    if shot.get("trim_start") is not None:
+        face_options["trim_frame_start"] = _coerce_frame_bound(shot["trim_start"])
+    if shot.get("trim_end") is not None:
+        face_options["trim_frame_end"] = _coerce_frame_bound(shot["trim_end"])
+    if shot.get("frame_start") is not None:
+        face_options["trim_frame_start"] = _coerce_frame_bound(shot["frame_start"])
+    if shot.get("frame_end") is not None:
+        face_options["trim_frame_end"] = _coerce_frame_bound(shot["frame_end"])
+    return {
+        "source_paths": source_paths,
+        "target_path": shot["target_path"],
+        "output_path": task["output_path"],
+        "processors": task["processors"],
+        "output_options": {"overwrite": overwrite},
+        "face_options": face_options,
+    }
+
+
+def _set_task_status(
+    task: dict[str, Any],
+    status: str,
+    note: str | None = None,
+    **extra: Any,
+) -> None:
+    task["status"] = status
+    if note is not None:
+        task["status_note"] = note
+    task.update(extra)
+
+
+def _find_task(plan: dict[str, Any], task_id: str) -> dict[str, Any]:
+    for task in plan["tasks"]:
+        if task["task_id"] == task_id:
+            return task
+    raise ValueError(f"Unknown task_id: {task_id}")
 
 
 @mcp.tool(description="Check whether the local FaceFusion installation can run on this machine.", structured_output=True)
@@ -434,6 +574,7 @@ def facefusion_run_job(
             extra_args=extra_args,
             facefusion_root=facefusion_root,
             python_path=python_path,
+            include_default_execution=True,
         )
     )
     result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
@@ -487,6 +628,7 @@ def facefusion_batch_run(
             extra_args=extra_args,
             facefusion_root=facefusion_root,
             python_path=python_path,
+            include_default_execution=True,
         )
     )
     result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
@@ -531,6 +673,7 @@ def facefusion_benchmark(
             extra_args=None,
             facefusion_root=facefusion_root,
             python_path=python_path,
+            include_default_execution=True,
         )
     )
     _append_flat_options(args, benchmark_options, benchmark_rename)
@@ -617,6 +760,7 @@ def facefusion_update_job_steps(
                 extra_args=step_request.get("extra_args"),
                 facefusion_root=facefusion_root,
                 python_path=python_path,
+                include_default_execution=False,
             )
         )
     else:
@@ -721,6 +865,396 @@ def facefusion_manage_jobs(
     raise ValueError(f"Unknown action: {action}")
 
 
+@mcp.tool(description="Create or update the cast definition for a multi-actor FaceFusion project.", structured_output=True)
+def facefusion_define_cast(
+    project_id: str,
+    target_media: list[str],
+    roles: list[dict[str, Any]],
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    if not roles:
+        raise ValueError("roles must not be empty")
+    for media_path in target_media:
+        _require_existing_file(media_path, "target_media item")
+    normalized_roles = [_normalize_role(role) for role in roles]
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    _ensure_directory(project_dir / "previews")
+    _ensure_directory(project_dir / "renders")
+    _ensure_directory(project_dir / "manifests")
+    payload = {
+        "project_id": project_id,
+        "target_media": target_media,
+        "roles": normalized_roles,
+    }
+    cast_path = project_dir / "cast.json"
+    _write_json(cast_path, payload)
+    return {
+        "project_id": project_id,
+        "project_dir": str(project_dir),
+        "cast_path": str(cast_path),
+        "role_count": len(normalized_roles),
+        "cast": payload,
+    }
+
+
+@mcp.tool(description="Create or update the shot list for a multi-actor FaceFusion project.", structured_output=True)
+def facefusion_plan_shots(
+    project_id: str,
+    target_path: str | None = None,
+    shots: list[dict[str, Any]] | None = None,
+    time_ranges: list[dict[str, Any]] | None = None,
+    auto_preview_policy: str = "smart",
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    if not shots and not time_ranges:
+        raise ValueError("Provide shots or time_ranges")
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    if not project_dir.exists():
+        raise ValueError(f"Unknown project_id: {project_id}")
+    if shots is None:
+        shots = []
+        for index, item in enumerate(time_ranges or [], start=1):
+            inferred_target = item.get("target_path") or target_path
+            if not inferred_target:
+                raise ValueError("target_path is required when time_ranges do not include target_path")
+            shots.append(
+                {
+                    "shot_id": item.get("shot_id") or f"s{index:03d}",
+                    "target_path": inferred_target,
+                    "trim_start": item.get("trim_start"),
+                    "trim_end": item.get("trim_end"),
+                    "frame_start": item.get("frame_start"),
+                    "frame_end": item.get("frame_end"),
+                    "roles": item.get("roles", []),
+                    "risk_level": item.get("risk_level"),
+                    "preview_required": item.get("preview_required"),
+                    "notes": item.get("notes", ""),
+                }
+            )
+    normalized_shots = [_normalize_shot(index, shot, auto_preview_policy) for index, shot in enumerate(shots, start=1)]
+    payload = {
+        "project_id": project_id,
+        "shots": normalized_shots,
+    }
+    shots_path = project_dir / "shots.json"
+    _write_json(shots_path, payload)
+    return {
+        "project_id": project_id,
+        "shots_path": str(shots_path),
+        "shot_count": len(normalized_shots),
+        "shots": payload,
+    }
+
+
+@mcp.tool(description="Build a preview and final task plan for a multi-actor FaceFusion project.", structured_output=True)
+def facefusion_build_multi_actor_plan(
+    project_id: str,
+    preview_mode: str = "smart",
+    quality_profile: str = "balanced",
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    cast = _read_json(project_dir / "cast.json")
+    shots = _read_json(project_dir / "shots.json")
+    role_ids = {role["role_id"] for role in cast["roles"]}
+    tasks: list[dict[str, Any]] = []
+    for shot in shots["shots"]:
+        missing_roles = [role_id for role_id in shot["roles"] if role_id not in role_ids]
+        if missing_roles:
+            raise ValueError(f"Shot {shot['shot_id']} references unknown roles: {missing_roles}")
+        processors = ["face_swapper"]
+        if quality_profile in {"balanced", "quality"}:
+            processors.append("face_enhancer")
+        preview_required = bool(shot["preview_required"])
+        if preview_mode == "always":
+            preview_required = True
+        if preview_mode == "never":
+            preview_required = False
+        execution_provider = "cuda"
+        if preview_required:
+            tasks.append(
+                {
+                    "task_id": f"preview-{shot['shot_id']}",
+                    "task_type": "preview",
+                    "shot_id": shot["shot_id"],
+                    "roles": shot["roles"],
+                    "mode": "reference" if len(shot["roles"]) > 1 else "standard",
+                    "status": "planned",
+                    "output_path": _task_output_path(project_dir, "preview", shot["shot_id"]),
+                    "processors": processors,
+                    "execution_provider": execution_provider,
+                    "quality_profile": "preview",
+                    "risk_level": shot["risk_level"],
+                }
+            )
+        tasks.append(
+            {
+                "task_id": f"final-{shot['shot_id']}",
+                "task_type": "final",
+                "shot_id": shot["shot_id"],
+                "roles": shot["roles"],
+                "mode": "reference" if len(shot["roles"]) > 1 else "standard",
+                "status": "blocked_on_preview" if preview_required else "planned",
+                "output_path": _task_output_path(project_dir, "final", shot["shot_id"]),
+                "processors": processors,
+                "execution_provider": execution_provider,
+                "quality_profile": quality_profile,
+                "risk_level": shot["risk_level"],
+            }
+        )
+    payload = {
+        "project_id": project_id,
+        "preview_mode": preview_mode,
+        "quality_profile": quality_profile,
+        "tasks": tasks,
+    }
+    plan_path = project_dir / "plan.json"
+    _write_json(plan_path, payload)
+    return {
+        "project_id": project_id,
+        "plan_path": str(plan_path),
+        "task_count": len(tasks),
+        "preview_count": len([task for task in tasks if task["task_type"] == "preview"]),
+        "final_count": len([task for task in tasks if task["task_type"] == "final"]),
+        "plan": payload,
+    }
+
+
+@mcp.tool(description="Create FaceFusion jobs and steps from a multi-actor project plan.", structured_output=True)
+def facefusion_materialize_multi_actor_jobs(
+    project_id: str,
+    job_strategy: str = "per_project",
+    include_final_tasks: bool = False,
+    jobs_path: str | None = None,
+    log_level: str = "info",
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    cast = _read_json(project_dir / "cast.json")
+    shots = _read_json(project_dir / "shots.json")
+    plan = _read_json(project_dir / "plan.json")
+    roles_by_id = {role["role_id"]: role for role in cast["roles"]}
+    shots_by_id = {shot["shot_id"]: shot for shot in shots["shots"]}
+    if job_strategy != "per_project":
+        raise ValueError("Only job_strategy='per_project' is currently supported")
+    job_id = project_id
+    create_result = facefusion_create_job(
+        job_id=job_id,
+        jobs_path=jobs_path,
+        log_level=log_level,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    if not create_result["success"]:
+        return {
+            "project_id": project_id,
+            "job_id": job_id,
+            "created": False,
+            "create_result": create_result,
+            "steps_created": [],
+        }
+    steps_created = []
+    for task in plan["tasks"]:
+        if task["task_type"] == "final" and not include_final_tasks:
+            continue
+        shot = shots_by_id[task["shot_id"]]
+        step_request = _build_task_step_request(task, shot, roles_by_id, overwrite=False)
+        add_result = facefusion_update_job_steps(
+            action="add",
+            job_id=job_id,
+            step_request=step_request,
+            jobs_path=jobs_path,
+            log_level=log_level,
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+        steps_created.append(
+            {
+                "task_id": task["task_id"],
+                "task_type": task["task_type"],
+                "result": add_result,
+            }
+        )
+        if add_result["success"]:
+            _set_task_status(
+                task,
+                "materialized",
+                note="Task added to FaceFusion job queue.",
+                materialized_job_id=job_id,
+                last_materialization_success=True,
+            )
+        else:
+            _set_task_status(
+                task,
+                "materialize_failed",
+                note=add_result.get("stderr_summary") or add_result.get("stdout_summary") or "Materialization failed.",
+                materialized_job_id=job_id,
+                last_materialization_success=False,
+            )
+    _write_json(project_dir / "plan.json", plan)
+    manifest_path = project_dir / "manifests" / "materialized-job.json"
+    _write_json(
+        manifest_path,
+        {
+            "project_id": project_id,
+            "job_id": job_id,
+            "include_final_tasks": include_final_tasks,
+            "steps_created": steps_created,
+        },
+    )
+    return {
+        "project_id": project_id,
+        "job_id": job_id,
+        "created": True,
+        "steps_created": steps_created,
+        "manifest_path": str(manifest_path),
+    }
+
+
+@mcp.tool(description="Approve or reject a preview task and unlock or keep-blocked the matching final task.", structured_output=True)
+def facefusion_approve_preview(
+    project_id: str,
+    task_id: str | None = None,
+    shot_id: str | None = None,
+    approved: bool = True,
+    approval_notes: str = "",
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    plan_path = project_dir / "plan.json"
+    plan = _read_json(plan_path)
+    if not task_id and not shot_id:
+        raise ValueError("Provide task_id or shot_id")
+    preview_task: dict[str, Any] | None = None
+    if task_id:
+        candidate = _find_task(plan, task_id)
+        if candidate["task_type"] != "preview":
+            raise ValueError("task_id must reference a preview task")
+        preview_task = candidate
+    else:
+        for task in plan["tasks"]:
+            if task["task_type"] == "preview" and task["shot_id"] == shot_id:
+                preview_task = task
+                break
+        if preview_task is None:
+            raise ValueError(f"No preview task found for shot_id: {shot_id}")
+    matching_final_tasks = [
+        task
+        for task in plan["tasks"]
+        if task["task_type"] == "final" and task["shot_id"] == preview_task["shot_id"]
+    ]
+    if approved:
+        _set_task_status(preview_task, "approved", note=approval_notes or "Preview approved.")
+        for task in matching_final_tasks:
+            if task["status"] in {"blocked_on_preview", "blocked_on_revision"}:
+                _set_task_status(task, "planned", note="Preview approved; final task unlocked.")
+    else:
+        _set_task_status(preview_task, "rejected", note=approval_notes or "Preview rejected.")
+        for task in matching_final_tasks:
+            _set_task_status(task, "blocked_on_revision", note="Preview rejected; revise before final render.")
+    _write_json(plan_path, plan)
+    return {
+        "project_id": project_id,
+        "preview_task_id": preview_task["task_id"],
+        "preview_status": preview_task["status"],
+        "final_tasks": [
+            {"task_id": task["task_id"], "status": task["status"]}
+            for task in matching_final_tasks
+        ],
+        "plan_path": str(plan_path),
+    }
+
+
+@mcp.tool(description="Reset a failed multi-actor task for retry, and optionally materialize it into a dedicated retry job.", structured_output=True)
+def facefusion_retry_failed_task(
+    project_id: str,
+    task_id: str,
+    materialize_immediately: bool = False,
+    jobs_path: str | None = None,
+    log_level: str = "info",
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    plan_path = project_dir / "plan.json"
+    plan = _read_json(plan_path)
+    cast = _read_json(project_dir / "cast.json")
+    shots = _read_json(project_dir / "shots.json")
+    task = _find_task(plan, task_id)
+    allowed_statuses = {"materialize_failed", "failed", "rejected", "blocked_on_revision"}
+    if task["status"] not in allowed_statuses:
+        raise ValueError(f"Task {task_id} is not in a retryable state: {task['status']}")
+    retry_count = int(task.get("retry_count", 0)) + 1
+    task["retry_count"] = retry_count
+    _set_task_status(task, "planned", note="Task reset for retry.")
+    roles_by_id = {role["role_id"]: role for role in cast["roles"]}
+    shots_by_id = {shot["shot_id"]: shot for shot in shots["shots"]}
+    materialization_result = None
+    if materialize_immediately:
+        retry_job_id = f"{project_id}-retry-{_slugify(task_id)}-{retry_count}"
+        create_result = facefusion_create_job(
+            job_id=retry_job_id,
+            jobs_path=jobs_path,
+            log_level=log_level,
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+        materialization_result = {"create_result": create_result}
+        if create_result["success"]:
+            shot = shots_by_id[task["shot_id"]]
+            step_request = _build_task_step_request(task, shot, roles_by_id, overwrite=False)
+            add_result = facefusion_update_job_steps(
+                action="add",
+                job_id=retry_job_id,
+                step_request=step_request,
+                jobs_path=jobs_path,
+                log_level=log_level,
+                facefusion_root=facefusion_root,
+                python_path=python_path,
+            )
+            materialization_result["add_result"] = add_result
+            if add_result["success"]:
+                _set_task_status(
+                    task,
+                    "materialized",
+                    note="Retry task materialized into a dedicated retry job.",
+                    materialized_job_id=retry_job_id,
+                    last_materialization_success=True,
+                )
+            else:
+                _set_task_status(
+                    task,
+                    "materialize_failed",
+                    note=add_result.get("stderr_summary") or add_result.get("stdout_summary") or "Retry materialization failed.",
+                    materialized_job_id=retry_job_id,
+                    last_materialization_success=False,
+                )
+        else:
+            _set_task_status(
+                task,
+                "materialize_failed",
+                note=create_result.get("stderr_summary") or create_result.get("stdout_summary") or "Retry job creation failed.",
+                last_materialization_success=False,
+            )
+    _write_json(plan_path, plan)
+    return {
+        "project_id": project_id,
+        "task_id": task_id,
+        "status": task["status"],
+        "retry_count": retry_count,
+        "materialize_immediately": materialize_immediately,
+        "materialization_result": materialization_result,
+        "plan_path": str(plan_path),
+    }
+
+
 @mcp.resource("facefusion://reference/commands", name="facefusion-commands", description="Static reference for FaceFusion command families.")
 def resource_commands() -> str:
     return (RESOURCE_DIR / "commands.md").read_text(encoding="utf-8")
@@ -749,6 +1283,11 @@ def resource_common_workflows() -> str:
 @mcp.resource("facefusion://reference/troubleshooting", name="facefusion-troubleshooting", description="Static troubleshooting notes for common FaceFusion failures.")
 def resource_troubleshooting() -> str:
     return (RESOURCE_DIR / "troubleshooting.md").read_text(encoding="utf-8")
+
+
+@mcp.resource("facefusion://recipes/multi-actor-workflow", name="facefusion-multi-actor-workflow", description="Project-state workflow for multi-role and multi-face FaceFusion edits.")
+def resource_multi_actor_workflow() -> str:
+    return (RESOURCE_DIR / "multi-actor-workflow.md").read_text(encoding="utf-8")
 
 
 @mcp.prompt(name="run-facefusion-task", description="Route a normal media-processing request into the right FaceFusion tool sequence.")
@@ -780,7 +1319,9 @@ def prompt_prepare_facefusion_environment() -> str:
 def prompt_orchestrate_facefusion_jobs() -> str:
     return (
         "Use FaceFusion job tools for queue-oriented workflows. "
-        "Create a draft with facefusion_create_job, then use facefusion_update_job_steps to add, insert, remix, or remove steps. "
+        "For multi-actor workflows, first use facefusion_define_cast, facefusion_plan_shots, and facefusion_build_multi_actor_plan, then use facefusion_materialize_multi_actor_jobs. "
+        "Use facefusion_approve_preview to promote approved preview tasks into final work, and use facefusion_retry_failed_task for local recovery on only the affected task. "
+        "Otherwise create a draft with facefusion_create_job, then use facefusion_update_job_steps to add, insert, remix, or remove steps. "
         "Inspect the queue with facefusion_manage_jobs. "
         "Submit, run, or retry jobs with facefusion_run_jobs. "
         "Prefer this path only when the user wants drafts, queues, retries, or step-by-step orchestration."
@@ -793,6 +1334,7 @@ def prompt_diagnose_facefusion_failure() -> str:
         "Diagnose a FaceFusion failure. "
         "Start from the failing tool result and summarize the concrete error. "
         "Read facefusion://reference/troubleshooting for likely causes and recovery paths. "
+        "For multi-actor project failures, prefer facefusion_retry_failed_task over rebuilding the entire queue, and use facefusion_approve_preview when a preview should keep final work blocked. "
         "If the failure looks environmental, rerun facefusion_health_check. "
         "If the failure looks like missing assets, call facefusion_download_models. "
         "Avoid blind retries before identifying whether the issue is configuration, environment, or inputs."

@@ -20,7 +20,8 @@
     "defaultPrompt": [
       "Check whether my local FaceFusion install is ready to run.",
       "Run a FaceFusion face swap on local media files.",
-      "Create and manage a FaceFusion batch job workflow."
+      "Create and manage a FaceFusion batch job workflow.",
+      "Coordinate a multi-actor FaceFusion project with preview approval."
     ]
   }
 }

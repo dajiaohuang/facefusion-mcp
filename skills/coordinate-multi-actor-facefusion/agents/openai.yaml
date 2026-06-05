@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Multi-Actor FaceFusion"
+  short_description: "Plan and run multi-role FaceFusion projects"
+  default_prompt: "Help me run a multi-actor FaceFusion project with preview approval"

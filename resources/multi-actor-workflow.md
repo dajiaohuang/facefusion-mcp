@@ -122,6 +122,7 @@ Rules:
 - `roles` lists only the roles that must be swapped in that segment
 - multi-role segments default to `preview_required = true`
 - multi-role or crowded segments default to `risk_level = high`
+- when a shot is materialized into a FaceFusion job step, any trim bounds are coerced to integer frame boundaries for CLI compatibility
 
 ## `plan.json` schema
 
@@ -400,6 +401,70 @@ Defaults:
 
 The preview must validate identity mapping, not cinematic quality.
 
+## Approval And Retry Loop
+
+Preview-first workflows need an explicit approval loop so the agent can promote only the right tasks.
+
+Recommended status flow:
+
+- `planned` -> ready to materialize
+- `materialized` -> added to a FaceFusion job
+- `approved` -> preview looked correct and matching final tasks may proceed
+- `rejected` -> preview had identity issues and should not promote final tasks
+- `blocked_on_preview` -> final task is waiting for preview approval
+- `blocked_on_revision` -> final task is waiting for the user or agent to revise the shot
+- `materialize_failed` -> the task could not be added to a FaceFusion job
+- `failed` -> execution failed after materialization
+
+Recommended tools:
+
+### `facefusion_approve_preview`
+
+Purpose:
+
+- mark a preview task approved or rejected
+- unlock matching final tasks when approved
+- keep matching final tasks blocked when revision is needed
+
+Input:
+
+- `project_id`
+- `task_id?`
+- `shot_id?`
+- `approved`
+- `approval_notes?`
+
+Output:
+
+- updated preview task status
+- affected final task statuses
+- persisted `plan.json` path
+
+### `facefusion_retry_failed_task`
+
+Purpose:
+
+- reset a failed or rejected task back into a runnable state
+- optionally materialize the retry into a dedicated FaceFusion job
+
+Input:
+
+- `project_id`
+- `task_id`
+- `materialize_immediately?`
+
+Output:
+
+- updated task status
+- retry count
+- optional materialization result
+
+Policy:
+
+- retry only the affected task
+- keep approved previews intact
+- if the failure came from incorrect identity mapping, reject the preview first and rebuild only the impacted shot
+
 ## Failure Recovery
 
 If a preview fails:
@@ -408,11 +473,13 @@ If a preview fails:
 - mark only that task as failed
 - attach failure notes to the shot or task
 - reroute through troubleshooting
+- use `facefusion_retry_failed_task` only after the task or shot has been revised
 
 If a final render fails:
 
 - preserve approved previews
 - retry only failed tasks
+- prefer retrying one task into a dedicated retry job instead of mutating the whole queue
 
 ## Acceptance Criteria
 
