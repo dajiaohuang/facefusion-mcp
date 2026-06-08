@@ -2095,27 +2095,96 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       --ink: #1f1d1a;
       --muted: #6e655d;
       --accent: #b14d24;
+      --accent-soft: rgba(177,77,36,0.12);
+      --ok: #2d7a55;
+      --warn: #9d5a14;
       --shadow: 0 18px 40px rgba(69,45,24,0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: "Segoe UI", sans-serif; color: var(--ink); background: linear-gradient(180deg, #fbf8f0 0%, #f2ede3 100%); }}
-    .shell {{ max-width: 1360px; margin: 0 auto; padding: 28px 20px 40px; }}
+    .shell {{ max-width: 1480px; margin: 0 auto; padding: 28px 20px 40px; }}
     .hero, .card {{ border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); }}
     .hero {{ padding: 24px; margin-bottom: 20px; }}
     .eyebrow {{ color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }}
     h1 {{ margin: 8px 0 0; font-size: 38px; }}
+    h2 {{ margin: 0 0 10px; font-size: 22px; }}
+    h3 {{ margin: 0; font-size: 18px; }}
     .sub, .muted {{ color: var(--muted); }}
-    .stats, .grid, .samples {{ display: grid; gap: 12px; }}
+    .stats, .grid, .samples, .columns, .editor-grid, .facts {{ display: grid; gap: 12px; }}
     .stats {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 16px; }}
     .grid {{ grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }}
+    .columns {{ grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.9fr); align-items: start; }}
+    .editor-grid {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
+    .facts {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }}
     .samples {{ grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 12px; }}
     .stat, .card {{ padding: 18px; }}
     .stat {{ border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,0.88); }}
     .label {{ color: var(--muted); font-size: 12px; text-transform: uppercase; }}
     .value {{ margin-top: 8px; font-size: 26px; font-weight: 700; }}
     .samples img {{ width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: #eee7dc; }}
-    .chip {{ display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(177,77,36,0.12); color: var(--accent); font-size: 12px; font-weight: 700; margin: 6px 6px 0 0; }}
-    code {{ display: block; white-space: pre-wrap; word-break: break-word; font-size: 12px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,0.7); border: 1px solid var(--line); }}
+    .toolbar {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 0; }}
+    .chip {{ display: inline-flex; padding: 6px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; margin: 6px 6px 0 0; }}
+    .chip.ok {{ background: rgba(45,122,85,0.12); color: var(--ok); }}
+    .chip.warn {{ background: rgba(157,90,20,0.14); color: var(--warn); }}
+    .badge-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+    .button {{
+      appearance: none;
+      border: 1px solid rgba(177,77,36,0.24);
+      background: white;
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+    }}
+    .button.primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
+    .button.subtle {{ background: rgba(255,255,255,0.7); }}
+    .button.danger {{ border-color: rgba(139,57,24,0.22); color: #8b3918; }}
+    .stack {{ display: grid; gap: 14px; }}
+    .group-card {{ padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.76); }}
+    .group-header {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }}
+    .cluster-picker {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }}
+    .cluster-option {{
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.72);
+    }}
+    .cluster-option.active {{ border-color: rgba(177,77,36,0.4); background: rgba(177,77,36,0.06); }}
+    .cluster-thumb {{ width: 100%; aspect-ratio: 1 / 1; border-radius: 12px; border: 1px solid var(--line); object-fit: cover; background: #eee7dc; }}
+    .field {{ display: grid; gap: 6px; }}
+    .field label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; }}
+    input[type="text"], select, textarea {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font: inherit;
+      color: var(--ink);
+      background: rgba(255,255,255,0.92);
+    }}
+    textarea {{ min-height: 120px; resize: vertical; }}
+    .raw-editor {{ min-height: 540px; font-family: Consolas, "SFMono-Regular", monospace; font-size: 12px; }}
+    .notice {{
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(177,77,36,0.08);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }}
+    .notice.error {{ background: rgba(161,61,24,0.08); color: #8b3918; }}
+    .facts .fact {{ padding: 12px; border-radius: 14px; background: rgba(255,255,255,0.72); border: 1px solid var(--line); }}
+    .facts .fact .k {{ font-size: 12px; color: var(--muted); text-transform: uppercase; }}
+    .facts .fact .v {{ margin-top: 8px; font-weight: 600; word-break: break-word; }}
+    .catalog {{ display: grid; gap: 10px; }}
+    .catalog-item {{ padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.72); }}
+    code {{ display: inline; padding: 2px 6px; border-radius: 8px; background: rgba(255,255,255,0.7); border: 1px solid var(--line); }}
+    @media (max-width: 1080px) {{
+      .columns {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
@@ -2123,61 +2192,497 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     <section class="hero">
       <div class="eyebrow">FaceFusion Role Reference Review</div>
       <h1>{title}</h1>
-      <p class="sub">Review discovered face clusters before plan materialization. Suggested groups and source prefills are shown as a starting point for merge decisions.</p>
+      <p class="sub">Review discovered face clusters before plan materialization. You can merge clusters into final roles, assign or override source faces, and directly edit the exported <code>decision_groups</code> JSON from this page.</p>
       <div class="stats">
         <div class="stat"><div class="label">Shots</div><div class="value" id="shotCount"></div></div>
         <div class="stat"><div class="label">Clusters</div><div class="value" id="clusterCount"></div></div>
         <div class="stat"><div class="label">Groups</div><div class="value" id="groupCount"></div></div>
         <div class="stat"><div class="label">Sources</div><div class="value" id="sourceCount"></div></div>
       </div>
+      <div class="toolbar">
+        <button class="button primary" id="addGroupButton" type="button">Add Group</button>
+        <button class="button subtle" id="resetButton" type="button">Reset To Suggested</button>
+        <button class="button subtle" id="applyJsonButton" type="button">Apply Raw JSON</button>
+        <button class="button subtle" id="copyJsonButton" type="button">Copy JSON</button>
+        <button class="button subtle" id="downloadJsonButton" type="button">Download JSON</button>
+      </div>
+      <div class="notice" id="statusBox">Use the group editor on the left, or edit the raw JSON on the right. Both stay in sync.</div>
     </section>
-    <section class="grid" id="clusters"></section>
+    <section class="columns">
+      <div class="stack">
+        <article class="card">
+          <h2>Decision Groups</h2>
+          <p class="sub">Each group becomes one final role. Merge by placing multiple clusters in the same group, then assign the source face for that role.</p>
+          <div class="stack" id="groups"></div>
+        </article>
+        <article class="card">
+          <h2>Detected Clusters</h2>
+          <p class="sub">This section is read-only context for who the original footage seems to contain and where each cluster appears.</p>
+          <section class="grid" id="clusters"></section>
+        </article>
+      </div>
+      <div class="stack">
+        <article class="card">
+          <h2>Raw Decisions JSON</h2>
+          <p class="sub">This is the payload to pass into <code>facefusion_apply_reference_decisions(groups=[...])</code>.</p>
+          <textarea class="raw-editor" id="rawEditor" spellcheck="false"></textarea>
+        </article>
+        <article class="card">
+          <h2>Validation</h2>
+          <div class="facts" id="validationFacts"></div>
+        </article>
+        <article class="card">
+          <h2>Source Candidates</h2>
+          <div class="catalog" id="sourceCatalog"></div>
+        </article>
+      </div>
+    </section>
   </div>
   <script>
     const view = {payload};
-    document.getElementById("shotCount").textContent = String((view.per_shot_summary || []).length);
-    document.getElementById("clusterCount").textContent = String((view.clusters || []).length);
-    document.getElementById("groupCount").textContent = String((view.decision_groups || view.suggested_groups || []).length);
-    document.getElementById("sourceCount").textContent = String((view.source_candidates || []).length);
-    const root = document.getElementById("clusters");
-    (view.clusters || []).forEach((cluster) => {{
-      const card = document.createElement("article");
-      card.className = "card";
-      const title = document.createElement("h2");
-      title.textContent = cluster.suggested_role_name || cluster.label || cluster.cluster_id;
-      card.appendChild(title);
-      const meta = document.createElement("p");
-      meta.className = "muted";
-      meta.textContent = `${{cluster.cluster_id}} | shots: ${{(cluster.shot_ids || []).join(", ") || "n/a"}} | samples: ${{cluster.sample_count || 0}}`;
-      card.appendChild(meta);
-      if (cluster.prefill_source_candidate) {{
-        const hint = document.createElement("p");
-        hint.className = "muted";
-        hint.textContent = `Prefill source: ${{cluster.prefill_source_candidate.label}}${{cluster.prefill_source_candidate.source_path ? " -> " + cluster.prefill_source_candidate.source_path : ""}}`;
-        card.appendChild(hint);
+    const clusters = view.clusters || [];
+    const sourceCandidates = view.source_candidates || [];
+    const sourceById = new Map(sourceCandidates.map((candidate) => [candidate.candidate_id, candidate]));
+
+    function slugify(value) {{
+      return String(value || "")
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    }}
+
+    function normalizeGroup(group, index) {{
+      const prefill = group.prefill_source_candidate || group.source_candidate || null;
+      return {{
+        group_id: group.group_id || `group-${{String(index + 1).padStart(2, "0")}}`,
+        cluster_ids: Array.from(new Set(group.cluster_ids || [])),
+        role_name: group.role_name || group.suggested_role_name || `Role ${{index + 1}}`,
+        role_id: group.role_id || group.suggested_role_id || slugify(group.role_name || group.suggested_role_name || `role-${{index + 1}}`),
+        source_candidate_id: group.source_candidate_id || prefill?.candidate_id || "",
+        source_path: group.source_path || prefill?.source_path || "",
+        notes: group.notes || "",
+      }};
+    }}
+
+    const fallbackGroups = (view.decision_groups || view.suggested_groups || []).map((group, index) => normalizeGroup(group, index));
+    const state = {{
+      groups: fallbackGroups.length ? fallbackGroups : clusters.map((cluster, index) => normalizeGroup({{
+        group_id: `group-${{String(index + 1).padStart(2, "0")}}`,
+        cluster_ids: [cluster.cluster_id],
+        suggested_role_name: cluster.suggested_role_name || cluster.label || cluster.cluster_id,
+        suggested_role_id: slugify(cluster.suggested_role_name || cluster.label || cluster.cluster_id),
+        prefill_source_candidate: cluster.prefill_source_candidate || null,
+      }}, index)),
+    }};
+
+    function toExportGroups() {{
+      return state.groups.map((group, index) => {{
+        const payload = {{
+          group_id: group.group_id || `group-${{String(index + 1).padStart(2, "0")}}`,
+          cluster_ids: Array.from(new Set(group.cluster_ids || [])),
+          role_name: group.role_name || `Role ${{index + 1}}`,
+        }};
+        if (group.role_id) payload.role_id = group.role_id;
+        if (group.source_candidate_id) payload.source_candidate_id = group.source_candidate_id;
+        if (group.source_path) payload.source_path = group.source_path;
+        if (group.notes) payload.notes = group.notes;
+        return payload;
+      }});
+    }}
+
+    function setStatus(message, isError = false) {{
+      const box = document.getElementById("statusBox");
+      box.textContent = message;
+      box.className = isError ? "notice error" : "notice";
+    }}
+
+    function sampleUrl(samplePath) {{
+      if (!samplePath) return "";
+      return samplePath.startsWith("file:") ? samplePath : "file:///" + samplePath.replace(/\\\\/g, "/");
+    }}
+
+    function renderStats() {{
+      document.getElementById("shotCount").textContent = String((view.per_shot_summary || []).length);
+      document.getElementById("clusterCount").textContent = String(clusters.length);
+      document.getElementById("groupCount").textContent = String(state.groups.length);
+      document.getElementById("sourceCount").textContent = String(sourceCandidates.length);
+    }}
+
+    function validationSummary() {{
+      const assigned = new Set();
+      let duplicateAssignments = 0;
+      let groupsMissingSource = 0;
+      let groupsMissingClusters = 0;
+      state.groups.forEach((group) => {{
+        if (!(group.cluster_ids || []).length) groupsMissingClusters += 1;
+        if (!group.source_candidate_id && !group.source_path) groupsMissingSource += 1;
+        (group.cluster_ids || []).forEach((clusterId) => {{
+          if (assigned.has(clusterId)) duplicateAssignments += 1;
+          assigned.add(clusterId);
+        }});
+      }});
+      const unassignedClusters = clusters.filter((cluster) => !assigned.has(cluster.cluster_id)).length;
+      return {{ duplicateAssignments, groupsMissingSource, groupsMissingClusters, unassignedClusters }};
+    }}
+
+    function syncRawEditor() {{
+      document.getElementById("rawEditor").value = JSON.stringify(toExportGroups(), null, 2);
+      renderValidation();
+      renderStats();
+    }}
+
+    function renderValidation() {{
+      const summary = validationSummary();
+      const root = document.getElementById("validationFacts");
+      root.innerHTML = "";
+      [
+        ["Groups", String(state.groups.length)],
+        ["Duplicate Cluster Assignments", String(summary.duplicateAssignments)],
+        ["Unassigned Clusters", String(summary.unassignedClusters)],
+        ["Groups Missing Source", String(summary.groupsMissingSource)],
+        ["Groups Missing Clusters", String(summary.groupsMissingClusters)],
+      ].forEach(([key, value]) => {{
+        const fact = document.createElement("div");
+        fact.className = "fact";
+        const k = document.createElement("div");
+        k.className = "k";
+        k.textContent = key;
+        const v = document.createElement("div");
+        v.className = "v";
+        v.textContent = value;
+        fact.appendChild(k);
+        fact.appendChild(v);
+        root.appendChild(fact);
+      }});
+    }}
+
+    function updateGroup(index, field, value) {{
+      state.groups[index][field] = value;
+      syncRawEditor();
+      renderGroups();
+    }}
+
+    function toggleCluster(index, clusterId, checked) {{
+      const clusterIds = new Set(state.groups[index].cluster_ids || []);
+      if (checked) clusterIds.add(clusterId);
+      else clusterIds.delete(clusterId);
+      state.groups[index].cluster_ids = Array.from(clusterIds);
+      syncRawEditor();
+      renderGroups();
+    }}
+
+    function renderGroups() {{
+      const summary = validationSummary();
+      const root = document.getElementById("groups");
+      root.innerHTML = "";
+      state.groups.forEach((group, index) => {{
+        const card = document.createElement("section");
+        card.className = "group-card";
+        const header = document.createElement("div");
+        header.className = "group-header";
+        const titleWrap = document.createElement("div");
+        const title = document.createElement("h3");
+        title.textContent = group.role_name || group.group_id || `Group ${{index + 1}}`;
+        titleWrap.appendChild(title);
+        const subtitle = document.createElement("div");
+        subtitle.className = "muted";
+        subtitle.textContent = group.group_id || `group-${{String(index + 1).padStart(2, "0")}}`;
+        titleWrap.appendChild(subtitle);
+        header.appendChild(titleWrap);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "button danger";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {{
+          state.groups.splice(index, 1);
+          syncRawEditor();
+          renderGroups();
+        }});
+        header.appendChild(remove);
+        card.appendChild(header);
+
+        const fields = document.createElement("div");
+        fields.className = "editor-grid";
+        [
+          ["Group ID", "group_id"],
+          ["Role Name", "role_name"],
+          ["Role ID", "role_id"],
+        ].forEach(([labelText, key]) => {{
+          const field = document.createElement("div");
+          field.className = "field";
+          const label = document.createElement("label");
+          label.textContent = labelText;
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = group[key] || "";
+          input.addEventListener("input", (event) => updateGroup(index, key, event.target.value));
+          field.appendChild(label);
+          field.appendChild(input);
+          fields.appendChild(field);
+        }});
+
+        const sourceField = document.createElement("div");
+        sourceField.className = "field";
+        const sourceLabel = document.createElement("label");
+        sourceLabel.textContent = "Source Candidate";
+        const sourceSelect = document.createElement("select");
+        const emptyOption = document.createElement("option");
+        emptyOption.value = "";
+        emptyOption.textContent = "No source selected";
+        sourceSelect.appendChild(emptyOption);
+        sourceCandidates.forEach((candidate) => {{
+          const option = document.createElement("option");
+          option.value = candidate.candidate_id;
+          option.textContent = `${{candidate.label}}${{candidate.source_path ? " -> " + candidate.source_path : ""}}`;
+          if (candidate.candidate_id === group.source_candidate_id) option.selected = true;
+          sourceSelect.appendChild(option);
+        }});
+        sourceSelect.addEventListener("change", (event) => {{
+          const candidateId = event.target.value;
+          const candidate = sourceById.get(candidateId);
+          state.groups[index].source_candidate_id = candidateId;
+          if (candidate && !state.groups[index].source_path) {{
+            state.groups[index].source_path = candidate.source_path || "";
+          }}
+          syncRawEditor();
+          renderGroups();
+        }});
+        sourceField.appendChild(sourceLabel);
+        sourceField.appendChild(sourceSelect);
+        fields.appendChild(sourceField);
+        card.appendChild(fields);
+
+        const pathField = document.createElement("div");
+        pathField.className = "field";
+        const pathLabel = document.createElement("label");
+        pathLabel.textContent = "Source Path Override";
+        const pathInput = document.createElement("input");
+        pathInput.type = "text";
+        pathInput.value = group.source_path || "";
+        pathInput.addEventListener("input", (event) => updateGroup(index, "source_path", event.target.value));
+        pathField.appendChild(pathLabel);
+        pathField.appendChild(pathInput);
+        card.appendChild(pathField);
+
+        const notesField = document.createElement("div");
+        notesField.className = "field";
+        const notesLabel = document.createElement("label");
+        notesLabel.textContent = "Notes";
+        const notesInput = document.createElement("textarea");
+        notesInput.value = group.notes || "";
+        notesInput.addEventListener("input", (event) => updateGroup(index, "notes", event.target.value));
+        notesField.appendChild(notesLabel);
+        notesField.appendChild(notesInput);
+        card.appendChild(notesField);
+
+        const clusterLabel = document.createElement("label");
+        clusterLabel.className = "muted";
+        clusterLabel.textContent = "Included Clusters";
+        card.appendChild(clusterLabel);
+        const picker = document.createElement("div");
+        picker.className = "cluster-picker";
+        clusters.forEach((cluster) => {{
+          const active = (group.cluster_ids || []).includes(cluster.cluster_id);
+          const option = document.createElement("label");
+          option.className = "cluster-option" + (active ? " active" : "");
+          const top = document.createElement("div");
+          top.style.display = "flex";
+          top.style.justifyContent = "space-between";
+          top.style.alignItems = "center";
+          const check = document.createElement("input");
+          check.type = "checkbox";
+          check.checked = active;
+          check.addEventListener("change", (event) => toggleCluster(index, cluster.cluster_id, event.target.checked));
+          const name = document.createElement("strong");
+          name.textContent = cluster.suggested_role_name || cluster.label || cluster.cluster_id;
+          top.appendChild(check);
+          top.appendChild(name);
+          option.appendChild(top);
+          const img = document.createElement("img");
+          img.className = "cluster-thumb";
+          img.src = sampleUrl((cluster.sample_paths || [])[0]);
+          img.alt = cluster.cluster_id;
+          option.appendChild(img);
+          const meta = document.createElement("div");
+          meta.className = "muted";
+          meta.textContent = `${{cluster.cluster_id}} | shots: ${{(cluster.shot_ids || []).join(", ") || "n/a"}}`;
+          option.appendChild(meta);
+          picker.appendChild(option);
+        }});
+        card.appendChild(picker);
+
+        const badges = document.createElement("div");
+        badges.className = "badge-row";
+        if (!(group.cluster_ids || []).length) {{
+          const chip = document.createElement("span");
+          chip.className = "chip warn";
+          chip.textContent = "No clusters assigned";
+          badges.appendChild(chip);
+        }}
+        if (!group.source_candidate_id && !group.source_path) {{
+          const chip = document.createElement("span");
+          chip.className = "chip warn";
+          chip.textContent = "Missing source";
+          badges.appendChild(chip);
+        }} else {{
+          const chip = document.createElement("span");
+          chip.className = "chip ok";
+          chip.textContent = group.source_candidate_id ? `Source: ${{group.source_candidate_id}}` : "Manual source path";
+          badges.appendChild(chip);
+        }}
+        if (summary.duplicateAssignments > 0) {{
+          const dupes = new Set();
+          state.groups.forEach((otherGroup, otherIndex) => {{
+            if (otherIndex === index) return;
+            (otherGroup.cluster_ids || []).forEach((clusterId) => {{
+              if ((group.cluster_ids || []).includes(clusterId)) dupes.add(clusterId);
+            }});
+          }});
+          if (dupes.size) {{
+            const chip = document.createElement("span");
+            chip.className = "chip warn";
+            chip.textContent = `Duplicate: ${{Array.from(dupes).join(", ")}}`;
+            badges.appendChild(chip);
+          }}
+        }}
+        card.appendChild(badges);
+        root.appendChild(card);
+      }});
+    }}
+
+    function renderClusterCatalog() {{
+      const root = document.getElementById("clusters");
+      root.innerHTML = "";
+      clusters.forEach((cluster) => {{
+        const card = document.createElement("article");
+        card.className = "card";
+        const heading = document.createElement("h3");
+        heading.textContent = cluster.suggested_role_name || cluster.label || cluster.cluster_id;
+        card.appendChild(heading);
+        const meta = document.createElement("p");
+        meta.className = "muted";
+        meta.textContent = `${{cluster.cluster_id}} | shots: ${{(cluster.shot_ids || []).join(", ") || "n/a"}} | samples: ${{cluster.sample_count || 0}}`;
+        card.appendChild(meta);
+        if (cluster.prefill_source_candidate) {{
+          const hint = document.createElement("p");
+          hint.className = "muted";
+          hint.textContent = `Prefill source: ${{cluster.prefill_source_candidate.label}}${{cluster.prefill_source_candidate.source_path ? " -> " + cluster.prefill_source_candidate.source_path : ""}}`;
+          card.appendChild(hint);
+        }}
+        const chipRow = document.createElement("div");
+        (cluster.shot_ids || []).forEach((shotId) => {{
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = shotId;
+          chipRow.appendChild(chip);
+        }});
+        card.appendChild(chipRow);
+        const sampleGrid = document.createElement("div");
+        sampleGrid.className = "samples";
+        (cluster.sample_paths || []).slice(0, 6).forEach((samplePath) => {{
+          const img = document.createElement("img");
+          img.src = sampleUrl(samplePath);
+          img.alt = cluster.cluster_id;
+          sampleGrid.appendChild(img);
+        }});
+        card.appendChild(sampleGrid);
+        root.appendChild(card);
+      }});
+    }}
+
+    function renderSourceCatalog() {{
+      const root = document.getElementById("sourceCatalog");
+      root.innerHTML = "";
+      if (!sourceCandidates.length) {{
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.textContent = "No source candidates found in references.json.";
+        root.appendChild(empty);
+        return;
       }}
-      const chipRow = document.createElement("div");
-      (cluster.shot_ids || []).forEach((shotId) => {{
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        chip.textContent = shotId;
-        chipRow.appendChild(chip);
+      sourceCandidates.forEach((candidate) => {{
+        const item = document.createElement("div");
+        item.className = "catalog-item";
+        const heading = document.createElement("strong");
+        heading.textContent = candidate.label || candidate.candidate_id;
+        item.appendChild(heading);
+        const id = document.createElement("div");
+        id.className = "muted";
+        id.textContent = candidate.candidate_id;
+        item.appendChild(id);
+        if (candidate.source_path) {{
+          const path = document.createElement("div");
+          path.className = "muted";
+          path.textContent = candidate.source_path;
+          item.appendChild(path);
+        }}
+        root.appendChild(item);
       }});
-      card.appendChild(chipRow);
-      const sampleGrid = document.createElement("div");
-      sampleGrid.className = "samples";
-      (cluster.sample_paths || []).slice(0, 6).forEach((samplePath) => {{
-        const img = document.createElement("img");
-        img.src = samplePath.startsWith("file:") ? samplePath : "file:///" + samplePath.replace(/\\\\/g, "/");
-        img.alt = cluster.cluster_id;
-        sampleGrid.appendChild(img);
-      }});
-      card.appendChild(sampleGrid);
-      const code = document.createElement("code");
-      code.textContent = JSON.stringify((view.decision_groups || view.suggested_groups || []).find((group) => (group.cluster_ids || []).includes(cluster.cluster_id)) || {{}}, null, 2);
-      card.appendChild(code);
-      root.appendChild(card);
+    }}
+
+    function addGroup() {{
+      state.groups.push(normalizeGroup({{
+        group_id: `group-${{String(state.groups.length + 1).padStart(2, "0")}}`,
+        cluster_ids: [],
+        role_name: `Role ${{state.groups.length + 1}}`,
+        role_id: `role-${{String(state.groups.length + 1).padStart(2, "0")}}`,
+      }}, state.groups.length));
+      syncRawEditor();
+      renderGroups();
+      setStatus("Added a new empty decision group.");
+    }}
+
+    function applyRawEditor() {{
+      const raw = document.getElementById("rawEditor").value.trim();
+      try {{
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(parsed)) throw new Error("Raw JSON must be an array of groups.");
+        state.groups = parsed.map((group, index) => normalizeGroup(group, index));
+        syncRawEditor();
+        renderGroups();
+        setStatus("Applied raw JSON into the visual editor.");
+      }} catch (error) {{
+        setStatus(error.message || String(error), true);
+      }}
+    }}
+
+    async function copyJson() {{
+      const text = document.getElementById("rawEditor").value;
+      try {{
+        await navigator.clipboard.writeText(text);
+        setStatus("Copied decision_groups JSON to clipboard.");
+      }} catch (error) {{
+        setStatus("Clipboard copy failed. You can still copy from the raw editor manually.", true);
+      }}
+    }}
+
+    function downloadJson() {{
+      const blob = new Blob([document.getElementById("rawEditor").value], {{ type: "application/json" }});
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${{view.project_id || "facefusion-project"}}-decision-groups.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      setStatus("Downloaded the decision_groups JSON file.");
+    }}
+
+    document.getElementById("addGroupButton").addEventListener("click", addGroup);
+    document.getElementById("resetButton").addEventListener("click", () => {{
+      state.groups = fallbackGroups.length ? fallbackGroups.map((group, index) => normalizeGroup(group, index)) : [];
+      syncRawEditor();
+      renderGroups();
+      setStatus("Reset editor state back to the suggested groups.");
     }});
+    document.getElementById("applyJsonButton").addEventListener("click", applyRawEditor);
+    document.getElementById("copyJsonButton").addEventListener("click", copyJson);
+    document.getElementById("downloadJsonButton").addEventListener("click", downloadJson);
+
+    renderStats();
+    renderClusterCatalog();
+    renderSourceCatalog();
+    syncRawEditor();
+    renderGroups();
   </script>
 </body>
 </html>
