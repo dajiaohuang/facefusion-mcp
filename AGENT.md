@@ -61,6 +61,13 @@ When the user confirms setup, `facefusion_install_or_setup` chooses the install 
 
 The virtual environment lives inside the chosen root at `.venv`.
 
+After a successful plugin-managed install or setup, persist:
+
+- `facefusion_root`
+- `python_path`
+
+to `facefusion.env.json` in the plugin root so later runs can resolve the same environment without relying on autodetection.
+
 ## Direct Task Routing
 
 Use `facefusion_run_job` when the user gives one explicit set of source and target paths.

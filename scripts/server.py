@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_DIR = PLUGIN_ROOT / "resources"
+ENV_CONFIG_PATH = PLUGIN_ROOT / "facefusion.env.json"
 DEFAULT_COMMANDS = [
     "run",
     "headless-run",
@@ -130,10 +131,27 @@ def _truncate(value: str, limit: int = 4000) -> str:
     return value[:limit] + "\n...[truncated]"
 
 
+def _read_env_config() -> dict[str, Any]:
+    if not ENV_CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(ENV_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_env_config(payload: dict[str, Any]) -> None:
+    ENV_CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _detect_default_facefusion_root() -> Path:
     env_root = os.environ.get("FACEFUSION_ROOT")
     if env_root:
         return Path(env_root)
+
+    config_root = _read_env_config().get("facefusion_root")
+    if config_root:
+        return Path(config_root)
 
     candidates = [
         PLUGIN_ROOT.parent.parent,
@@ -147,19 +165,36 @@ def _detect_default_facefusion_root() -> Path:
 
 
 FACEFUSION_ROOT = _detect_default_facefusion_root()
-DEFAULT_PYTHON = Path(os.environ.get("FACEFUSION_PYTHON", FACEFUSION_ROOT / ".venv" / "Scripts" / "python.exe"))
+DEFAULT_PYTHON = Path(
+    os.environ.get(
+        "FACEFUSION_PYTHON",
+        _read_env_config().get("python_path", FACEFUSION_ROOT / ".venv" / "Scripts" / "python.exe"),
+    )
+)
 
 
 def _facefusion_python(facefusion_root: str | None = None, python_path: str | None = None) -> Path:
     if python_path:
         return Path(python_path)
+    if os.environ.get("FACEFUSION_PYTHON"):
+        return Path(os.environ["FACEFUSION_PYTHON"])
+    config_python = _read_env_config().get("python_path")
+    if config_python and not facefusion_root:
+        return Path(config_python)
     if facefusion_root:
         return Path(facefusion_root) / ".venv" / "Scripts" / "python.exe"
     return DEFAULT_PYTHON
 
 
 def _facefusion_root(facefusion_root: str | None = None) -> Path:
-    return Path(facefusion_root) if facefusion_root else FACEFUSION_ROOT
+    if facefusion_root:
+        return Path(facefusion_root)
+    if os.environ.get("FACEFUSION_ROOT"):
+        return Path(os.environ["FACEFUSION_ROOT"])
+    config_root = _read_env_config().get("facefusion_root")
+    if config_root:
+        return Path(config_root)
+    return FACEFUSION_ROOT
 
 
 def _recommended_install_root(facefusion_root: str | None = None) -> Path:
@@ -701,6 +736,7 @@ def facefusion_health_check(
 ) -> dict[str, Any]:
     root = _facefusion_root(facefusion_root)
     python_exe = _facefusion_python(facefusion_root, python_path)
+    env_config = _read_env_config()
     git_check = _command_available("git", cwd=PLUGIN_ROOT)
     ffmpeg_check = _run_subprocess(["ffmpeg", "-version"], cwd=root if root.exists() else PLUGIN_ROOT)
     version_check = _run_facefusion_command(["-v"], facefusion_root=facefusion_root, python_path=python_path)
@@ -736,6 +772,8 @@ def facefusion_health_check(
     return {
         "facefusion_root": str(root),
         "python_path": str(python_exe),
+        "env_config_path": str(ENV_CONFIG_PATH),
+        "env_config": env_config,
         "facefusion_version": version_check["stdout"].strip(),
         "git_available": git_check["success"],
         "ffmpeg_available": ffmpeg_check["success"],
@@ -931,6 +969,16 @@ def facefusion_install_or_setup(
         )
         commands_run.append({"step": "preload_models", "result": preload_result})
 
+    post_health = facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]))
+    _write_env_config(
+        {
+            "facefusion_root": str(target_root),
+            "python_path": str(venv_info["python"]),
+            "managed_by_plugin": True,
+            "repo_url": repo_url,
+            "ref": ref,
+        }
+    )
     post_health = facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]))
     return {
         "confirmed": True,

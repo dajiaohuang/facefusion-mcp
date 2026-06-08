@@ -85,13 +85,15 @@ The server resolves FaceFusion in this order:
 
 1. `facefusion_root` tool argument
 2. `FACEFUSION_ROOT` environment variable
-3. repository-adjacent autodetection
+3. `facefusion.env.json` stored in the plugin root
+4. repository-adjacent autodetection
 
 It resolves the Python interpreter in this order:
 
 1. `python_path` tool argument
 2. `FACEFUSION_PYTHON` environment variable
-3. `<facefusion_root>/.venv/Scripts/python.exe`
+3. `facefusion.env.json` stored in the plugin root
+4. `<facefusion_root>/.venv/Scripts/python.exe`
 
 ## Local Setup
 
@@ -130,6 +132,7 @@ Notes:
 - Installation is confirmation-gated. The plugin does not install FaceFusion automatically without user approval.
 - `ffmpeg` is checked by the health check, but this plugin currently does not install `ffmpeg` for the user.
 - The default install path is either the user-provided `install_root`, `FACEFUSION_ROOT`, an existing detected checkout, or a plugin-managed fallback directory.
+- After a successful plugin-managed install or setup, the resolved `facefusion_root` and `python_path` are persisted to `facefusion.env.json` in the plugin root.
 
 Install path priority:
 
