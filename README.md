@@ -103,6 +103,46 @@ $env:FACEFUSION_PYTHON="D:\facefusion-3.6.1\.venv\Scripts\python.exe"
 python .\scripts\server.py --stdio
 ```
 
+## If FaceFusion Is Missing
+
+After this plugin is installed, you can ask the agent to install or set up FaceFusion for you.
+
+The expected flow is:
+
+1. The agent runs `facefusion_health_check`.
+2. If FaceFusion is missing or incomplete, the tool reports:
+   - `needs_install` or `needs_setup`
+   - `missing_components`
+   - `suggested_install_root`
+   - `can_auto_install_or_setup`
+3. The agent explains the proposed install/setup plan and asks for confirmation.
+4. Only after explicit confirmation does the agent call `facefusion_install_or_setup(confirmed=true, ...)`.
+5. The install tool then:
+   - clones or reuses a FaceFusion checkout
+   - creates or reuses a `.venv`
+   - upgrades `pip`
+   - runs `install.py --skip-conda --onnxruntime <variant>`
+   - optionally preloads models
+6. The agent runs `facefusion_health_check` again and reports the new status.
+
+Notes:
+
+- Installation is confirmation-gated. The plugin does not install FaceFusion automatically without user approval.
+- `ffmpeg` is checked by the health check, but this plugin currently does not install `ffmpeg` for the user.
+- The default install path is either the user-provided `install_root`, `FACEFUSION_ROOT`, an existing detected checkout, or a plugin-managed fallback directory.
+
+Install path priority:
+
+1. `install_root` passed to `facefusion_install_or_setup`
+2. `FACEFUSION_ROOT`
+3. an already detected FaceFusion checkout
+4. `plugins/facefusion-local/.facefusion-runtime`
+
+The Python environment is created inside the chosen install root at:
+
+- `.venv\Scripts\python.exe`
+- `.venv\Scripts\pip.exe`
+
 ## MCP Tools
 
 - `facefusion_health_check`
