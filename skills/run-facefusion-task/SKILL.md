@@ -28,17 +28,19 @@ Use this skill to turn a normal FaceFusion media-processing request into the rig
 - Prefer a matching built-in `preset` before hand-authoring many low-level options when the task is standard.
 - Do not use job-management tools unless the user explicitly asks for drafts, queues, retries, or multi-step orchestration.
 - Respect the MCP overwrite guard. If the output path already exists, choose a new output path or set `overwrite=true` only when the user clearly intends replacement.
-- Use `misc_options.skip_nsfw_check=true` only when the user explicitly asks to bypass FaceFusion NSFW detection.
+- Do not hardcode task defaults in the skill. The plugin reads its normal execution defaults from `facefusion.env.json`, especially `task_defaults.common`, `task_defaults.<task_kind>`, `tool_defaults.common`, and `tool_defaults.<tool_name>`.
+- Use explicit `preset` or option overrides only when the user asks to deviate from the environment defaults.
+- Use `misc_options.skip_nsfw_check=true` only when the user explicitly asks to override the environment default for NSFW handling.
 
 ## Defaults
 
-- Default execution provider: `cuda`, with fallback to `cpu`
-- Default log level: `info`
-- Common starting processors:
-  - face swap: `face_swapper`
-  - face cleanup: `face_enhancer`
-  - cutout: `background_remover`
-  - lip sync: `lip_syncer`
+- Runtime defaults come from `facefusion.env.json`.
+- If no env override is present, the plugin still falls back to FaceFusion capability detection and MCP preset defaults.
+- The most important env-driven defaults are:
+  - queue behavior
+  - NSFW wrapper behavior
+  - default execution provider
+  - default preset and output-quality policy per task kind
 
 ## References
 

@@ -4,14 +4,17 @@
 
 Drive a complex FaceFusion project by gathering only the next missing piece of information.
 
+The environment may prefer UI mode by default. Regardless of UI preference, generate an initial draft state after the first prompt and then keep refining it until the missing details are filled.
+
 ## Phase Order
 
 1. Source candidates
 2. Shots
 3. Reference discovery and merge
-4. Plan
-5. Preview approval
-6. Retry or final promotion
+4. Shot-level optional operations
+5. Plan
+6. Preview approval
+7. Retry or final promotion
 
 Do not ask ahead for details that belong to later phases unless the user already volunteered them.
 
@@ -30,6 +33,7 @@ Completion signal:
 
 - every source candidate has a stable id
 - every source candidate has one active `source_face_path`
+- if the user gave only partial information, still produce the initial draft state and continue with follow-up questions
 
 ## Phase 2: Shots
 
@@ -47,6 +51,7 @@ Good prompt shape:
 Completion signal:
 
 - each shot has `shot_id`, target path, and either explicit `operations[]` or an unresolved placeholder for later role assignment
+- if the environment is in UI mode, this is usually enough to render the first review UI
 
 ## Phase 3: Reference discovery and merge
 
@@ -73,8 +78,27 @@ Completion signal:
 - every final target role has one or more cluster ids
 - every final target role either has a source face assigned or is explicitly marked waiting for source input
 - `facefusion_apply_reference_decisions` has been called for the resolved roles
+- in UI mode, render the reference review page and continue the conversation from there
+- in no-UI mode, summarize the same draft state in text and keep asking merge/source questions
 
-## Phase 4: Plan
+## Phase 4: Shot-level optional operations
+
+Default policy:
+
+- keep these off unless the user explicitly wants them
+- common optional additions are `lip_sync`, `face_enhance`, `frame_enhance`, `background_remove`, `expression_restore`, `face_edit`, `age_modify`, and `frame_colorize`
+- if the user says "apply to every shot", treat it as a batch shot-operation decision
+
+Good prompt shape:
+
+- "Do any of these shots also need optional pipeline steps like lip sync, face repair, frame enhancement, or background removal? By default I leave them off."
+
+Completion signal:
+
+- the selected extra operations are captured per shot
+- `facefusion_apply_shot_operation_decisions` has been called when the user asked for any
+
+## Phase 5: Plan
 
 Default policy:
 
@@ -93,7 +117,17 @@ Good prompt shape:
 
 - "I have mapped the detected clusters into final roles and can now build the preview-first execution plan."
 
-## Phase 5: Preview Approval
+In UI mode:
+
+- render the plan review page after the initial plan draft
+- keep asking for the missing details instead of assuming the HTML page replaces the conversation
+
+In no-UI mode:
+
+- summarize the draft plan in text
+- continue asking follow-up questions until the plan is fully specified
+
+## Phase 6: Preview Approval
 
 When preview outputs exist:
 
@@ -105,7 +139,7 @@ Good prompt shape:
 
 - "Preview `preview-s002` is ready. Should I approve it and unlock `final-s002`, or keep it blocked for revision?"
 
-## Phase 6: Retry
+## Phase 7: Retry
 
 Use `facefusion_retry_failed_task` when:
 

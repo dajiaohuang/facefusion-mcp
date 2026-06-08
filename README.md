@@ -208,6 +208,43 @@ Scope:
 - it is not forwarded as a FaceFusion CLI flag
 - it applies only to runs launched through this plugin
 
+## Environment Defaults
+
+The plugin can also read environment-level runtime defaults from `facefusion.env.json`.
+
+Useful sections:
+
+- `default_ui_mode`
+- `tool_defaults.common`
+- `tool_defaults.run_job`
+- `tool_defaults.launch_ui`
+- `tool_defaults.batch_run`
+- `tool_defaults.benchmark`
+- `task_defaults.common`
+- `task_defaults.face_swap`
+- `task_defaults.lip_sync`
+- `task_defaults.background_remove`
+- `task_defaults.face_enhance`
+- `task_defaults.frame_enhance`
+- `task_defaults.frame_colorize`
+- `task_defaults.face_edit`
+- `task_defaults.expression_restore`
+- `task_defaults.age_modify`
+- `task_defaults.face_debug`
+
+Precedence:
+
+1. built-in MCP preset defaults
+2. `facefusion.env.json`
+3. explicit tool arguments for the current call
+
+This means you can keep your preferred default quality or speed policy in `facefusion.env.json`, while still overriding it per task when needed.
+
+`default_ui_mode` controls whether the agent should prefer the visual review flow by default:
+
+- `true`: after the initial prompt, generate the initial draft state such as cast, reference groups, shot-operation draft, and plan draft, then render the HTML review UI and continue asking follow-up questions until all details are filled
+- `false`: after the initial prompt, still generate the initial draft state first, but continue by dialogue only, summarizing the current cast, references, shot operations, and plan state until all missing details are filled without depending on the HTML review pages
+
 ## Head And Headless
 
 - Prefer the `facefusion_task_*` tools for normal work.

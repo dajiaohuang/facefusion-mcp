@@ -52,6 +52,7 @@ Use this guide when operating as an agent against the local plugin.
 - `facefusion_plan_shots`
 - `facefusion_discover_role_references`
 - `facefusion_apply_reference_decisions`
+- `facefusion_apply_shot_operation_decisions`
 - `facefusion_render_reference_ui`
 - `facefusion_build_multi_actor_plan`
 - `facefusion_render_plan_ui`
@@ -102,13 +103,21 @@ Use `facefusion_list_presets` when the user wants a fast starting point rather t
 
 Use `facefusion_check_queue` when the user asks whether the background worker is alive, how many jobs remain, or whether recent queued work is still pending.
 
-Prefer these processor starting points:
+Normal task defaults should come from `facefusion.env.json`, especially:
 
-- face swap: `face_swapper`
-- face cleanup: `face_enhancer`
-- lip sync: `lip_syncer`
-- cutout: `background_remover`
-- frame cleanup: `frame_enhancer`
+- `default_ui_mode`
+- `task_defaults.common`
+- `task_defaults.<task_kind>`
+- `tool_defaults.common`
+- `tool_defaults.<tool_name>`
+
+Only pass explicit `preset` or low-level options when the user wants to override those environment defaults.
+
+Interaction mode rule:
+
+- if `default_ui_mode=true`, prefer generating initial draft state and rendering the relevant review UI early
+- if `default_ui_mode=false`, still generate the same initial draft state, but keep refining it through conversation alone
+- in both modes, do not wait for every detail before producing the first cast/reference/shot/plan draft
 
 Plugin runtime overrides:
 
@@ -117,7 +126,7 @@ Plugin runtime overrides:
 - `facefusion_batch_run`: `misc_options.skip_nsfw_check=true`
 - `facefusion_run_jobs`: `skip_nsfw_check=true`
 
-This wrapper-based override only affects plugin-launched runs and does not patch the FaceFusion source tree on disk.
+This wrapper-based override only affects plugin-launched runs and does not patch the FaceFusion source tree on disk. If `facefusion.env.json` already sets `default_skip_nsfw_check`, treat that as the normal baseline and use explicit tool flags only when intentionally overriding it.
 
 ## Preset Rule
 
@@ -141,11 +150,12 @@ Use this order:
 3. `facefusion_discover_role_references`
 4. `facefusion_render_reference_ui` when the user wants a visual review layer before role merge
 5. `facefusion_apply_reference_decisions`
-6. `facefusion_build_multi_actor_plan`
-7. `facefusion_render_plan_ui` when the user wants a visual review layer
-8. `facefusion_materialize_multi_actor_jobs`
-9. `facefusion_approve_preview`
-10. `facefusion_retry_failed_task` when needed
+6. `facefusion_apply_shot_operation_decisions` when the user wants optional per-shot pipeline additions such as lip sync, face repair, frame enhancement, background removal, or other non-default operations
+7. `facefusion_build_multi_actor_plan`
+8. `facefusion_render_plan_ui` when the user wants a visual review layer
+9. `facefusion_materialize_multi_actor_jobs`
+10. `facefusion_approve_preview`
+11. `facefusion_retry_failed_task` when needed
 
 Treat the project as three persisted layers:
 
@@ -171,12 +181,26 @@ Recommended order:
 1. create source candidates in `cast.json`
 2. split the target video into `shots.json`
 3. run `facefusion_discover_role_references`
-4. show the discovered clusters and prefills back to the user
+4. show the discovered clusters and prefills back to the user, either in the review UI or in conversation depending on `default_ui_mode`
 5. ask the user which clusters should merge into one final role
 6. ask whether each merged role should keep the prefilled source face or switch to another source
 7. if any merged role still has no source face, ask the user to send or name the missing target source image
 8. call `facefusion_apply_reference_decisions`
-9. only then build `plan.json`
+9. ask whether any shot also needs optional pipeline operations such as `lip_sync`, `face_enhance`, `frame_enhance`, `background_remove`, `expression_restore`, `face_edit`, `age_modify`, or `frame_colorize`
+10. if yes, call `facefusion_apply_shot_operation_decisions`
+11. only then build `plan.json`
+
+UI-mode default:
+
+- if `default_ui_mode=true`, the initial conversational pass should normally produce draft `cast.json`, `references.json`, `shots.json`, and then render `reference-view.html`
+- after the user refines merge/source/shot-operation choices, build `plan.json` and render `plan-view.html`
+- continue asking follow-up questions until all missing details are filled, even when the UI is available
+
+No-UI default:
+
+- if `default_ui_mode=false`, still create the initial draft state after the first prompt
+- summarize the draft cast, references, optional shot operations, and plan in chat
+- keep asking follow-up questions and applying updates until the plan is fully specified without relying on the HTML review pages
 
 What the agent should tell the user after reference discovery:
 
@@ -200,6 +224,34 @@ OpenClaw or remote-image case:
   - merged final roles
   - assigned source faces
   - still-missing source faces
+
+## Shot-Level Optional Operations
+
+Optional shot pipeline operations are off by default. Treat them as an explicit layer added after role mapping and before plan build.
+
+Examples:
+
+- `lip_sync`
+- `face_enhance`
+- `frame_enhance`
+- `background_remove`
+- `expression_restore`
+- `face_edit`
+- `age_modify`
+- `frame_colorize`
+
+What the agent should ask:
+
+- "Should any shot also get lip sync, face repair, frame enhancement, background removal, or other optional pipeline steps?"
+- "Apply those to all shots, or only selected shot ids?"
+
+When the user says something like:
+
+- "give every shot face repair"
+- "also do lip sync on each shot"
+- "add frame enhance to these three shots"
+
+use `facefusion_apply_shot_operation_decisions` before building the final plan.
 
 ## Multi-Actor Operation Model
 

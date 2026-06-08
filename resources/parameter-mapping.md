@@ -86,6 +86,8 @@
 ## Presets
 
 - Presets are MCP-side default bundles layered over the normal request groups.
+- `facefusion.env.json` can inject `tool_defaults.*` and `task_defaults.*` between preset defaults and explicit per-call overrides.
+- `facefusion.env.json` can also set `default_ui_mode` to control whether the agent should prefer the HTML review flow by default during multi-step planning.
 - Explicit request fields override preset defaults.
 - See `facefusion://reference/presets` for the curated preset set.
 

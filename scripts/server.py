@@ -280,6 +280,85 @@ def _default_background_queue_runner() -> bool:
     return bool(_read_env_config().get("default_background_queue_runner", False))
 
 
+def _default_ui_mode() -> bool:
+    env_config = _read_env_config()
+    if "default_ui_mode" not in env_config:
+        return True
+    return bool(env_config.get("default_ui_mode"))
+
+
+def _read_named_defaults(bucket_name: str, name: str) -> dict[str, Any]:
+    bucket = _read_env_config().get(bucket_name)
+    if not isinstance(bucket, dict):
+        return {
+            "preset": None,
+            "processors": [],
+            "execution": {},
+            "output_options": {},
+            "memory_options": {},
+            "face_options": {},
+            "download_options": {},
+            "misc_options": {},
+            "extra_args": [],
+        }
+    common = bucket.get("common")
+    specific = bucket.get(name)
+    common = common if isinstance(common, dict) else {}
+    specific = specific if isinstance(specific, dict) else {}
+    common_processors = common.get("processors") or common.get("default_processors") or []
+    specific_processors = specific.get("processors") or specific.get("default_processors") or []
+    return {
+        "preset": specific.get("preset", common.get("preset")),
+        "processors": list(specific_processors or common_processors or []),
+        "execution": _merge_option_dict(common.get("execution"), specific.get("execution")),
+        "output_options": _merge_option_dict(common.get("output_options"), specific.get("output_options")),
+        "memory_options": _merge_option_dict(common.get("memory_options"), specific.get("memory_options")),
+        "face_options": _merge_option_dict(common.get("face_options"), specific.get("face_options")),
+        "download_options": _merge_option_dict(common.get("download_options"), specific.get("download_options")),
+        "misc_options": _merge_option_dict(common.get("misc_options"), specific.get("misc_options")),
+        "extra_args": list(specific.get("extra_args") or common.get("extra_args") or []),
+    }
+
+
+def _resolve_runtime_bundle(
+    preset: str | None,
+    *,
+    defaults_bucket: str,
+    defaults_name: str,
+    fallback_processors: list[str] | None,
+    processors: list[str] | None,
+    execution: dict[str, Any] | None,
+    output_options: dict[str, Any] | None,
+    memory_options: dict[str, Any] | None,
+    face_options: dict[str, Any] | None,
+    download_options: dict[str, Any] | None,
+    misc_options: dict[str, Any] | None,
+    extra_args: list[str] | None,
+) -> tuple[dict[str, Any], str | None]:
+    env_defaults = _read_named_defaults(defaults_bucket, defaults_name)
+    effective_preset = preset if preset is not None else env_defaults.get("preset")
+    if processors is not None:
+        effective_processors = list(processors)
+    elif env_defaults.get("processors"):
+        effective_processors = list(env_defaults["processors"])
+    elif fallback_processors is not None:
+        effective_processors = list(fallback_processors)
+    else:
+        effective_processors = None
+    resolved = _resolve_preset_bundle(
+        effective_preset,
+        processors=effective_processors,
+        execution=_merge_option_dict(env_defaults.get("execution"), execution),
+        output_options=_merge_option_dict(env_defaults.get("output_options"), output_options),
+        memory_options=_merge_option_dict(env_defaults.get("memory_options"), memory_options),
+        face_options=_merge_option_dict(env_defaults.get("face_options"), face_options),
+        download_options=_merge_option_dict(env_defaults.get("download_options"), download_options),
+        misc_options=_merge_option_dict(env_defaults.get("misc_options"), misc_options),
+        extra_args=_merge_list(env_defaults.get("extra_args"), extra_args),
+    )
+    return resolved, effective_preset
+
+
 def _read_runner_state() -> dict[str, Any]:
     if not RUNNER_STATE_PATH.exists():
         return {}
@@ -1153,6 +1232,65 @@ def _task_output_path(project_dir: Path, task_type: str, shot_id: str, operation
     return str(project_dir / folder / f"{shot_id}-{_slugify(operation_id)}-{_slugify(operation_type)}-{task_type}{suffix}")
 
 
+def _shot_operation_decision_to_operations(
+    shot: dict[str, Any],
+    enabled_operations: list[str],
+) -> list[dict[str, Any]]:
+    roles = list(shot.get("roles") or [])
+    preview_required = bool(shot.get("preview_required"))
+    risk_level = shot.get("risk_level") or "medium"
+    operations: list[dict[str, Any]] = []
+    if roles:
+        operations.append(
+            _normalize_operation(
+                1,
+                {"operation_type": "face_swap", "roles": roles, "preview_required": preview_required},
+                roles,
+                preview_required,
+                risk_level,
+            )
+        )
+    next_index = len(operations) + 1
+    for operation_type in enabled_operations:
+        if operation_type == "face_swap":
+            continue
+        if operation_type not in MULTI_ACTOR_OPERATION_PROFILES:
+            raise ValueError(f"Unsupported operation_type in shot decision: {operation_type}")
+        if operation_type == "lip_sync":
+            if not roles:
+                continue
+            for role_id in roles:
+                operations.append(
+                    _normalize_operation(
+                        next_index,
+                        {
+                            "operation_type": "lip_sync",
+                            "roles": [role_id],
+                            "preview_required": True,
+                        },
+                        roles,
+                        preview_required,
+                        risk_level,
+                    )
+                )
+                next_index += 1
+            continue
+        operations.append(
+            _normalize_operation(
+                next_index,
+                {
+                    "operation_type": operation_type,
+                    "preview_required": preview_required,
+                },
+                roles,
+                preview_required,
+                risk_level,
+            )
+        )
+        next_index += 1
+    return operations
+
+
 def _coerce_frame_bound(value: Any) -> int:
     if isinstance(value, bool):
         raise ValueError("Frame bounds cannot be boolean values")
@@ -1421,6 +1559,7 @@ def _queue_single_step_job(
 
 def _run_task_shortcut(
     *,
+    task_kind: str,
     source_paths: list[str],
     target_path: str,
     output_path: str,
@@ -1436,12 +1575,12 @@ def _run_task_shortcut(
     facefusion_root: str | None,
     python_path: str | None,
 ) -> dict[str, Any]:
-    return facefusion_run_job(
-        source_paths=source_paths,
-        target_path=target_path,
-        output_path=output_path,
-        preset=preset,
-        processors=default_processors,
+    resolved, effective_preset = _resolve_runtime_bundle(
+        preset,
+        defaults_bucket="task_defaults",
+        defaults_name=task_kind,
+        fallback_processors=default_processors,
+        processors=None,
         execution=execution,
         output_options=output_options,
         memory_options=memory_options,
@@ -1449,6 +1588,20 @@ def _run_task_shortcut(
         download_options=download_options,
         misc_options=misc_options,
         extra_args=extra_args,
+    )
+    return facefusion_run_job(
+        source_paths=source_paths,
+        target_path=target_path,
+        output_path=output_path,
+        preset=effective_preset,
+        processors=resolved["processors"],
+        execution=resolved["execution"],
+        output_options=resolved["output_options"],
+        memory_options=resolved["memory_options"],
+        face_options=resolved["face_options"],
+        download_options=resolved["download_options"],
+        misc_options=resolved["misc_options"],
+        extra_args=resolved["extra_args"],
         facefusion_root=facefusion_root,
         python_path=python_path,
     )
@@ -2142,6 +2295,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     .button.danger {{ border-color: rgba(139,57,24,0.22); color: #8b3918; }}
     .stack {{ display: grid; gap: 14px; }}
     .group-card {{ padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.76); }}
+    .group-card.drop-target {{ border-color: rgba(177,77,36,0.55); box-shadow: 0 0 0 3px rgba(177,77,36,0.10); }}
     .group-header {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }}
     .cluster-picker {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }}
     .cluster-option {{
@@ -2153,7 +2307,20 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       background: rgba(255,255,255,0.72);
     }}
     .cluster-option.active {{ border-color: rgba(177,77,36,0.4); background: rgba(177,77,36,0.06); }}
+    .cluster-option.dragging {{ opacity: 0.55; }}
     .cluster-thumb {{ width: 100%; aspect-ratio: 1 / 1; border-radius: 12px; border: 1px solid var(--line); object-fit: cover; background: #eee7dc; }}
+    .cluster-bucket {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; min-height: 18px; }}
+    .cluster-token {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.88);
+      cursor: grab;
+    }}
+    .cluster-token img {{ width: 24px; height: 24px; border-radius: 999px; object-fit: cover; border: 1px solid var(--line); }}
     .field {{ display: grid; gap: 6px; }}
     .field label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; }}
     input[type="text"], select, textarea {{
@@ -2181,6 +2348,24 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     .facts .fact .v {{ margin-top: 8px; font-weight: 600; word-break: break-word; }}
     .catalog {{ display: grid; gap: 10px; }}
     .catalog-item {{ padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.72); }}
+    .catalog-item img {{ width: 56px; height: 56px; border-radius: 14px; object-fit: cover; border: 1px solid var(--line); margin-bottom: 8px; }}
+    .shot-op-card {{ padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,0.76); }}
+    .op-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }}
+    .op-toggle {{ display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.78); }}
+    .op-toggle input {{ margin-top: 3px; }}
+    .dropzone {{
+      padding: 14px;
+      border: 1.5px dashed rgba(177,77,36,0.35);
+      border-radius: 16px;
+      background: rgba(177,77,36,0.05);
+      color: var(--muted);
+      text-align: center;
+    }}
+    .dropzone.active {{
+      border-color: rgba(177,77,36,0.7);
+      background: rgba(177,77,36,0.10);
+      color: var(--accent);
+    }}
     code {{ display: inline; padding: 2px 6px; border-radius: 8px; background: rgba(255,255,255,0.7); border: 1px solid var(--line); }}
     @media (max-width: 1080px) {{
       .columns {{ grid-template-columns: 1fr; }}
@@ -2220,6 +2405,16 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
           <p class="sub">This section is read-only context for who the original footage seems to contain and where each cluster appears.</p>
           <section class="grid" id="clusters"></section>
         </article>
+        <article class="card">
+          <h2>Shot Pipeline Options</h2>
+          <p class="sub">Default is off. Add optional per-shot pipeline operations such as lip sync, face enhancement, frame enhancement, background removal, expression restore, face edit, age modify, or colorization before you build the final plan.</p>
+          <div class="toolbar">
+            <button class="button subtle" id="selectAllFaceEnhanceButton" type="button">All Shots Face Repair</button>
+            <button class="button subtle" id="selectAllLipSyncButton" type="button">All Shots Lip Sync</button>
+            <button class="button subtle" id="clearAllShotOpsButton" type="button">Clear Shot Ops</button>
+          </div>
+          <div class="stack" id="shotOps"></div>
+        </article>
       </div>
       <div class="stack">
         <article class="card">
@@ -2228,11 +2423,20 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
           <textarea class="raw-editor" id="rawEditor" spellcheck="false"></textarea>
         </article>
         <article class="card">
+          <h2>Shot Operations JSON</h2>
+          <p class="sub">This is the payload to pass into <code>facefusion_apply_shot_operation_decisions(shot_operations=[...])</code>.</p>
+          <div class="toolbar">
+            <button class="button subtle" id="applyShotOpsButton" type="button">Apply Shot Ops JSON</button>
+          </div>
+          <textarea class="raw-editor" id="shotOpsEditor" spellcheck="false"></textarea>
+        </article>
+        <article class="card">
           <h2>Validation</h2>
           <div class="facts" id="validationFacts"></div>
         </article>
         <article class="card">
           <h2>Source Candidates</h2>
+          <div class="dropzone" id="sourceLibraryDropzone">Drop face image files here to add source candidates to the library.</div>
           <div class="catalog" id="sourceCatalog"></div>
         </article>
       </div>
@@ -2241,8 +2445,18 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
   <script>
     const view = {payload};
     const clusters = view.clusters || [];
+    const shots = view.shots || [];
     const sourceCandidates = view.source_candidates || [];
-    const sourceById = new Map(sourceCandidates.map((candidate) => [candidate.candidate_id, candidate]));
+    const shotOperationCatalog = [
+      {{ operation_type: "lip_sync", label: "Lip Sync", description: "Adds lip-sync operations. Multi-role shots expand into one speaking-role task per role.", role_mode: "per_role" }},
+      {{ operation_type: "face_enhance", label: "Face Repair", description: "Adds a face enhancement cleanup pass for the shot.", role_mode: "global" }},
+      {{ operation_type: "frame_enhance", label: "Frame Enhance", description: "Adds a whole-frame enhancement pass.", role_mode: "global" }},
+      {{ operation_type: "background_remove", label: "Background Remove", description: "Adds a background removal pass.", role_mode: "global" }},
+      {{ operation_type: "expression_restore", label: "Expression Restore", description: "Adds an expression restoration pass.", role_mode: "global" }},
+      {{ operation_type: "face_edit", label: "Face Edit", description: "Adds a face editing pass for pose, gaze, or mouth adjustment.", role_mode: "global" }},
+      {{ operation_type: "age_modify", label: "Age Modify", description: "Adds an age modification pass.", role_mode: "global" }},
+      {{ operation_type: "frame_colorize", label: "Colorize", description: "Adds a colorization pass for grayscale or archival footage.", role_mode: "global" }},
+    ];
 
     function slugify(value) {{
       return String(value || "")
@@ -2274,7 +2488,33 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
         suggested_role_id: slugify(cluster.suggested_role_name || cluster.label || cluster.cluster_id),
         prefill_source_candidate: cluster.prefill_source_candidate || null,
       }}, index)),
+      manualSourceCandidates: [],
+      shotOperations: (shots || []).map((shot) => {{
+        const enabled = new Set();
+        (shot.operations || []).forEach((operation) => {{
+          if ((operation.operation_type || "") !== "face_swap") {{
+            enabled.add(operation.operation_type);
+          }}
+        }});
+        return {{
+          shot_id: shot.shot_id,
+          enabled_operations: Array.from(enabled),
+          notes: "",
+        }};
+      }}),
     }};
+
+    function allSourceCandidates() {{
+      return [...sourceCandidates, ...state.manualSourceCandidates];
+    }}
+
+    function sourceByIdMap() {{
+      return new Map(allSourceCandidates().map((candidate) => [candidate.candidate_id, candidate]));
+    }}
+
+    function clusterById(clusterId) {{
+      return clusters.find((cluster) => cluster.cluster_id === clusterId) || null;
+    }}
 
     function toExportGroups() {{
       return state.groups.map((group, index) => {{
@@ -2302,11 +2542,89 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       return samplePath.startsWith("file:") ? samplePath : "file:///" + samplePath.replace(/\\\\/g, "/");
     }}
 
+    function clusterLabel(clusterId) {{
+      const cluster = clusterById(clusterId);
+      return cluster ? (cluster.suggested_role_name || cluster.label || cluster.cluster_id) : clusterId;
+    }}
+
+    function registerManualSourceFiles(files, targetGroupIndex = null) {{
+      const accepted = Array.from(files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+      if (!accepted.length) {{
+        setStatus("No image files were detected in the drop payload.", true);
+        return;
+      }}
+      const newCandidates = accepted.map((file, index) => {{
+        const filePath = file.path || file.name || "";
+        const baseName = (file.name || `manual-source-${{Date.now()}}-${{index + 1}}`).replace(/\\.[^.]+$/, "");
+        return {{
+          candidate_id: `manual-upload-${{Date.now()}}-${{index + 1}}`,
+          label: baseName,
+          source_path: filePath,
+          preview_url: URL.createObjectURL(file),
+          from_drop: true,
+          path_uncertain: !file.path,
+        }};
+      }});
+      state.manualSourceCandidates.push(...newCandidates);
+      if (targetGroupIndex !== null && state.groups[targetGroupIndex]) {{
+        const picked = newCandidates[0];
+        state.groups[targetGroupIndex].source_candidate_id = picked.candidate_id;
+        state.groups[targetGroupIndex].source_path = picked.source_path || "";
+        if (!state.groups[targetGroupIndex].role_name || /^Role \\d+$/.test(state.groups[targetGroupIndex].role_name)) {{
+          state.groups[targetGroupIndex].role_name = picked.label;
+        }}
+        if (!state.groups[targetGroupIndex].role_id || /^role-\\d+$/.test(state.groups[targetGroupIndex].role_id)) {{
+          state.groups[targetGroupIndex].role_id = slugify(picked.label) || state.groups[targetGroupIndex].role_id;
+        }}
+      }}
+      syncRawEditor();
+      renderGroups();
+      renderSourceCatalog();
+      const uncertain = newCandidates.some((candidate) => candidate.path_uncertain);
+      setStatus(
+        uncertain
+          ? "Added dropped image files. Browser did not expose a full local path for at least one file, so you may need to correct source_path in the JSON before apply."
+          : "Added dropped image files as source candidates."
+      );
+    }}
+
+    function moveClusterToGroup(clusterId, targetGroupIndex) {{
+      state.groups.forEach((group, index) => {{
+        const before = new Set(group.cluster_ids || []);
+        if (index === targetGroupIndex) {{
+          before.add(clusterId);
+        }} else {{
+          before.delete(clusterId);
+        }}
+        group.cluster_ids = Array.from(before);
+      }});
+      syncRawEditor();
+      renderGroups();
+    }}
+
+    function enableDropzone(element, onDropCallback, activeClass = "active") {{
+      ["dragenter", "dragover"].forEach((eventName) => {{
+        element.addEventListener(eventName, (event) => {{
+          event.preventDefault();
+          element.classList.add(activeClass);
+        }});
+      }});
+      ["dragleave", "dragend", "drop"].forEach((eventName) => {{
+        element.addEventListener(eventName, () => {{
+          element.classList.remove(activeClass);
+        }});
+      }});
+      element.addEventListener("drop", (event) => {{
+        event.preventDefault();
+        onDropCallback(event);
+      }});
+    }}
+
     function renderStats() {{
       document.getElementById("shotCount").textContent = String((view.per_shot_summary || []).length);
       document.getElementById("clusterCount").textContent = String(clusters.length);
       document.getElementById("groupCount").textContent = String(state.groups.length);
-      document.getElementById("sourceCount").textContent = String(sourceCandidates.length);
+      document.getElementById("sourceCount").textContent = String(allSourceCandidates().length);
     }}
 
     function validationSummary() {{
@@ -2328,6 +2646,20 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
 
     function syncRawEditor() {{
       document.getElementById("rawEditor").value = JSON.stringify(toExportGroups(), null, 2);
+      document.getElementById("shotOpsEditor").value = JSON.stringify(
+        state.shotOperations.map((item) => {{
+          const payload = {{
+            shot_id: item.shot_id,
+            enabled_operations: item.enabled_operations || [],
+          }};
+          if (item.notes) {{
+            payload.notes = item.notes;
+          }}
+          return payload;
+        }}),
+        null,
+        2
+      );
       renderValidation();
       renderStats();
     }}
@@ -2336,12 +2668,14 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       const summary = validationSummary();
       const root = document.getElementById("validationFacts");
       root.innerHTML = "";
+      const enabledShotOps = state.shotOperations.reduce((count, item) => count + (item.enabled_operations || []).length, 0);
       [
         ["Groups", String(state.groups.length)],
         ["Duplicate Cluster Assignments", String(summary.duplicateAssignments)],
         ["Unassigned Clusters", String(summary.unassignedClusters)],
         ["Groups Missing Source", String(summary.groupsMissingSource)],
         ["Groups Missing Clusters", String(summary.groupsMissingClusters)],
+        ["Shot Pipeline Ops", String(enabledShotOps)],
       ].forEach(([key, value]) => {{
         const fact = document.createElement("div");
         fact.className = "fact";
@@ -2372,6 +2706,101 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       renderGroups();
     }}
 
+    function updateShotOperation(shotId, operationType, checked) {{
+      const shotState = state.shotOperations.find((item) => item.shot_id === shotId);
+      if (!shotState) {{
+        return;
+      }}
+      const enabled = new Set(shotState.enabled_operations || []);
+      if (checked) {{
+        enabled.add(operationType);
+      }} else {{
+        enabled.delete(operationType);
+      }}
+      shotState.enabled_operations = Array.from(enabled);
+      syncRawEditor();
+      renderShotOperations();
+    }}
+
+    function setShotOperationForAll(operationType, checked) {{
+      state.shotOperations.forEach((shotState) => {{
+        const enabled = new Set(shotState.enabled_operations || []);
+        if (checked) {{
+          enabled.add(operationType);
+        }} else {{
+          enabled.delete(operationType);
+        }}
+        shotState.enabled_operations = Array.from(enabled);
+      }});
+      syncRawEditor();
+      renderShotOperations();
+    }}
+
+    function renderShotOperations() {{
+      const root = document.getElementById("shotOps");
+      root.innerHTML = "";
+      shots.forEach((shot) => {{
+        const shotState = state.shotOperations.find((item) => item.shot_id === shot.shot_id) || {{
+          shot_id: shot.shot_id,
+          enabled_operations: [],
+          notes: "",
+        }};
+        const card = document.createElement("section");
+        card.className = "shot-op-card";
+        const title = document.createElement("h3");
+        title.textContent = shot.shot_id;
+        card.appendChild(title);
+        const meta = document.createElement("div");
+        meta.className = "muted";
+        meta.textContent = [shot.target_path, shot.trim_start ?? shot.frame_start, shot.trim_end ?? shot.frame_end].filter((value) => value !== null && value !== undefined && value !== "").join(" | ");
+        card.appendChild(meta);
+        const roles = document.createElement("div");
+        roles.className = "badge-row";
+        (shot.roles || []).forEach((roleId) => {{
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = roleId;
+          roles.appendChild(chip);
+        }});
+        if (!(shot.roles || []).length) {{
+          const chip = document.createElement("span");
+          chip.className = "chip warn";
+          chip.textContent = "No roles assigned yet";
+          roles.appendChild(chip);
+        }}
+        card.appendChild(roles);
+        const opGrid = document.createElement("div");
+        opGrid.className = "op-grid";
+        shotOperationCatalog.forEach((op) => {{
+          const wrap = document.createElement("label");
+          wrap.className = "op-toggle";
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.checked = (shotState.enabled_operations || []).includes(op.operation_type);
+          box.addEventListener("change", (event) => updateShotOperation(shot.shot_id, op.operation_type, event.target.checked));
+          wrap.appendChild(box);
+          const textWrap = document.createElement("div");
+          const name = document.createElement("strong");
+          name.textContent = op.label;
+          textWrap.appendChild(name);
+          const desc = document.createElement("div");
+          desc.className = "muted";
+          desc.textContent = op.description;
+          textWrap.appendChild(desc);
+          if (op.operation_type === "lip_sync" && (shot.roles || []).length > 1) {{
+            const note = document.createElement("div");
+            note.className = "muted";
+            note.textContent = "This shot has multiple roles. Lip sync will expand to one operation per role.";
+            textWrap.appendChild(note);
+          }}
+          wrap.appendChild(textWrap);
+          opGrid.appendChild(wrap);
+        }});
+        card.appendChild(opGrid);
+        root.appendChild(card);
+      }});
+    }}
+
     function renderGroups() {{
       const summary = validationSummary();
       const root = document.getElementById("groups");
@@ -2379,6 +2808,17 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       state.groups.forEach((group, index) => {{
         const card = document.createElement("section");
         card.className = "group-card";
+        enableDropzone(card, (event) => {{
+          const clusterId = event.dataTransfer.getData("text/cluster-id");
+          if (clusterId) {{
+            moveClusterToGroup(clusterId, index);
+            setStatus(`Moved ${{clusterLabel(clusterId)}} into ${{group.role_name || group.group_id}}.`);
+            return;
+          }}
+          if (event.dataTransfer.files && event.dataTransfer.files.length) {{
+            registerManualSourceFiles(event.dataTransfer.files, index);
+          }}
+        }}, "drop-target");
         const header = document.createElement("div");
         header.className = "group-header";
         const titleWrap = document.createElement("div");
@@ -2431,7 +2871,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
         emptyOption.value = "";
         emptyOption.textContent = "No source selected";
         sourceSelect.appendChild(emptyOption);
-        sourceCandidates.forEach((candidate) => {{
+        allSourceCandidates().forEach((candidate) => {{
           const option = document.createElement("option");
           option.value = candidate.candidate_id;
           option.textContent = `${{candidate.label}}${{candidate.source_path ? " -> " + candidate.source_path : ""}}`;
@@ -2440,7 +2880,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
         }});
         sourceSelect.addEventListener("change", (event) => {{
           const candidateId = event.target.value;
-          const candidate = sourceById.get(candidateId);
+          const candidate = sourceByIdMap().get(candidateId);
           state.groups[index].source_candidate_id = candidateId;
           if (candidate && !state.groups[index].source_path) {{
             state.groups[index].source_path = candidate.source_path || "";
@@ -2476,16 +2916,55 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
         notesField.appendChild(notesInput);
         card.appendChild(notesField);
 
-        const clusterLabel = document.createElement("label");
-        clusterLabel.className = "muted";
-        clusterLabel.textContent = "Included Clusters";
-        card.appendChild(clusterLabel);
+        const assignLabel = document.createElement("label");
+        assignLabel.className = "muted";
+        assignLabel.textContent = "Merged Cluster Set";
+        card.appendChild(assignLabel);
+        const bucket = document.createElement("div");
+        bucket.className = "cluster-bucket";
+        (group.cluster_ids || []).forEach((clusterId) => {{
+          const token = document.createElement("div");
+          token.className = "cluster-token";
+          token.draggable = true;
+          token.addEventListener("dragstart", (event) => {{
+            event.dataTransfer.setData("text/cluster-id", clusterId);
+          }});
+          const avatar = document.createElement("img");
+          const cluster = clusterById(clusterId);
+          avatar.src = sampleUrl(cluster && (cluster.sample_paths || [])[0]);
+          avatar.alt = clusterId;
+          token.appendChild(avatar);
+          const text = document.createElement("span");
+          text.textContent = clusterLabel(clusterId);
+          token.appendChild(text);
+          bucket.appendChild(token);
+        }});
+        if (!(group.cluster_ids || []).length) {{
+          const empty = document.createElement("div");
+          empty.className = "muted";
+          empty.textContent = "Drag detected clusters here to merge them into this role.";
+          bucket.appendChild(empty);
+        }}
+        card.appendChild(bucket);
+
+        const clusterFieldLabel = document.createElement("label");
+        clusterFieldLabel.className = "muted";
+        clusterFieldLabel.textContent = "Included Clusters (checkbox or drag)";
+        card.appendChild(clusterFieldLabel);
         const picker = document.createElement("div");
         picker.className = "cluster-picker";
         clusters.forEach((cluster) => {{
           const active = (group.cluster_ids || []).includes(cluster.cluster_id);
           const option = document.createElement("label");
           option.className = "cluster-option" + (active ? " active" : "");
+          option.draggable = true;
+          option.addEventListener("dragstart", (event) => {{
+            option.classList.add("dragging");
+            event.dataTransfer.setData("text/cluster-id", cluster.cluster_id);
+          }});
+          option.addEventListener("dragend", () => {{
+            option.classList.remove("dragging");
+          }});
           const top = document.createElement("div");
           top.style.display = "flex";
           top.style.justifyContent = "space-between";
@@ -2594,16 +3073,23 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     function renderSourceCatalog() {{
       const root = document.getElementById("sourceCatalog");
       root.innerHTML = "";
-      if (!sourceCandidates.length) {{
+      const candidates = allSourceCandidates();
+      if (!candidates.length) {{
         const empty = document.createElement("div");
         empty.className = "muted";
         empty.textContent = "No source candidates found in references.json.";
         root.appendChild(empty);
         return;
       }}
-      sourceCandidates.forEach((candidate) => {{
+      candidates.forEach((candidate) => {{
         const item = document.createElement("div");
         item.className = "catalog-item";
+        if (candidate.preview_url) {{
+          const img = document.createElement("img");
+          img.src = candidate.preview_url;
+          img.alt = candidate.label || candidate.candidate_id;
+          item.appendChild(img);
+        }}
         const heading = document.createElement("strong");
         heading.textContent = candidate.label || candidate.candidate_id;
         item.appendChild(heading);
@@ -2667,19 +3153,65 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       setStatus("Downloaded the decision_groups JSON file.");
     }}
 
+    function applyShotOpsEditor() {{
+      const raw = document.getElementById("shotOpsEditor").value.trim();
+      try {{
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(parsed)) throw new Error("Shot operations JSON must be an array.");
+        state.shotOperations = parsed.map((item) => {{
+          const enabled = Array.isArray(item.enabled_operations) ? item.enabled_operations.filter(Boolean) : [];
+          return {{
+            shot_id: item.shot_id,
+            enabled_operations: Array.from(new Set(enabled)),
+            notes: item.notes || "",
+          }};
+        }});
+        syncRawEditor();
+        renderShotOperations();
+        setStatus("Applied shot operations JSON into the visual editor.");
+      }} catch (error) {{
+        setStatus(error.message || String(error), true);
+      }}
+    }}
+
     document.getElementById("addGroupButton").addEventListener("click", addGroup);
     document.getElementById("resetButton").addEventListener("click", () => {{
       state.groups = fallbackGroups.length ? fallbackGroups.map((group, index) => normalizeGroup(group, index)) : [];
+      state.manualSourceCandidates = [];
       syncRawEditor();
       renderGroups();
+      renderSourceCatalog();
       setStatus("Reset editor state back to the suggested groups.");
     }});
     document.getElementById("applyJsonButton").addEventListener("click", applyRawEditor);
+    document.getElementById("applyShotOpsButton").addEventListener("click", applyShotOpsEditor);
     document.getElementById("copyJsonButton").addEventListener("click", copyJson);
     document.getElementById("downloadJsonButton").addEventListener("click", downloadJson);
+    document.getElementById("selectAllFaceEnhanceButton").addEventListener("click", () => {{
+      setShotOperationForAll("face_enhance", true);
+      setStatus("Enabled face repair for all shots.");
+    }});
+    document.getElementById("selectAllLipSyncButton").addEventListener("click", () => {{
+      setShotOperationForAll("lip_sync", true);
+      setStatus("Enabled lip sync for all shots.");
+    }});
+    document.getElementById("clearAllShotOpsButton").addEventListener("click", () => {{
+      state.shotOperations.forEach((shotState) => {{
+        shotState.enabled_operations = [];
+      }});
+      syncRawEditor();
+      renderShotOperations();
+      setStatus("Cleared all optional shot pipeline operations.");
+    }});
+    enableDropzone(document.getElementById("sourceLibraryDropzone"), (event) => {{
+      if (event.dataTransfer.files && event.dataTransfer.files.length) {{
+        registerManualSourceFiles(event.dataTransfer.files, null);
+      }}
+    }});
 
     renderStats();
     renderClusterCatalog();
+    renderShotOperations();
     renderSourceCatalog();
     syncRawEditor();
     renderGroups();
@@ -2735,6 +3267,7 @@ def facefusion_health_check(
         "python_path": str(python_exe),
         "env_config_path": str(ENV_CONFIG_PATH),
         "env_config": env_config,
+        "default_ui_mode": _default_ui_mode(),
         "facefusion_version": version_check["stdout"].strip(),
         "git_available": git_check["success"],
         "ffmpeg_available": ffmpeg_check["success"],
@@ -2997,7 +3530,8 @@ def facefusion_install_or_setup(
         commands_run.append({"step": "preload_models", "result": preload_result})
 
     post_health = facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]))
-    _write_env_config(
+    updated_env_config = _read_env_config()
+    updated_env_config.update(
         {
             "facefusion_root": str(target_root),
             "python_path": str(venv_info["python"]),
@@ -3006,6 +3540,7 @@ def facefusion_install_or_setup(
             "ref": ref,
         }
     )
+    _write_env_config(updated_env_config)
     post_health = facefusion_health_check(facefusion_root=str(target_root), python_path=str(venv_info["python"]))
     return {
         "confirmed": True,
@@ -3037,8 +3572,11 @@ def facefusion_run_job(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    resolved = _resolve_preset_bundle(
+    resolved, effective_preset = _resolve_runtime_bundle(
         preset,
+        defaults_bucket="tool_defaults",
+        defaults_name="run_job",
+        fallback_processors=None,
         processors=processors,
         execution=execution,
         output_options=output_options,
@@ -3075,7 +3613,7 @@ def facefusion_run_job(
         "source_paths": source_paths,
         "target_path": target_path,
         "output_path": output_path,
-        "preset": preset,
+        "preset": effective_preset,
         "enqueue": queue_mode,
         "jobs_path": jobs_path,
         "processors": resolved["processors"],
@@ -3147,8 +3685,11 @@ def facefusion_launch_ui(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    resolved = _resolve_preset_bundle(
+    resolved, effective_preset = _resolve_runtime_bundle(
         preset,
+        defaults_bucket="tool_defaults",
+        defaults_name="launch_ui",
+        fallback_processors=None,
         processors=processors,
         execution=execution,
         output_options=None,
@@ -3209,7 +3750,7 @@ def facefusion_launch_ui(
                 "source_paths": normalized_sources,
                 "target_path": target_path,
                 "output_path": output_path,
-                "preset": preset,
+                "preset": effective_preset,
                 "processors": resolved["processors"],
                 "execution": resolved["execution"] or {"providers": _default_provider(facefusion_root=facefusion_root, python_path=python_path)},
                 "memory_options": resolved["memory_options"],
@@ -3229,7 +3770,7 @@ def facefusion_launch_ui(
         "dry_run": False,
         "launched": result["success"],
         "effective_command_args": effective_command_args,
-        "preset": preset,
+        "preset": effective_preset,
         "skip_nsfw_check": skip_nsfw_check,
         "open_browser": open_browser,
         "ui_layouts": ui_layouts or [],
@@ -3254,8 +3795,11 @@ def facefusion_batch_run(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    resolved = _resolve_preset_bundle(
+    resolved, effective_preset = _resolve_runtime_bundle(
         preset,
+        defaults_bucket="tool_defaults",
+        defaults_name="batch_run",
+        fallback_processors=None,
         processors=processors,
         execution=execution,
         output_options=output_options,
@@ -3290,7 +3834,7 @@ def facefusion_batch_run(
             "target_pattern": target_pattern,
             "output_pattern": output_pattern,
         },
-        "preset": preset,
+        "preset": effective_preset,
         "skip_nsfw_check": skip_nsfw_check,
     }
 
@@ -3300,7 +3844,7 @@ def facefusion_task_face_swap(
     source_paths: list[str],
     target_path: str,
     output_path: str,
-    preset: str = "balanced_face_swap",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3312,6 +3856,7 @@ def facefusion_task_face_swap(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="face_swap",
         source_paths=source_paths,
         target_path=target_path,
         output_path=output_path,
@@ -3336,7 +3881,7 @@ def facefusion_task_lip_sync(
     source_audio_paths: list[str],
     target_path: str,
     output_path: str,
-    preset: str = "lip_sync_clean",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3348,6 +3893,7 @@ def facefusion_task_lip_sync(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="lip_sync",
         source_paths=source_audio_paths,
         target_path=target_path,
         output_path=output_path,
@@ -3371,7 +3917,7 @@ def facefusion_task_lip_sync(
 def facefusion_task_remove_background(
     target_path: str,
     output_path: str,
-    preset: str = "background_cutout",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3383,6 +3929,7 @@ def facefusion_task_remove_background(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="background_remove",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3406,7 +3953,7 @@ def facefusion_task_remove_background(
 def facefusion_task_enhance_face(
     target_path: str,
     output_path: str,
-    preset: str = "portrait_enhance",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3418,6 +3965,7 @@ def facefusion_task_enhance_face(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="face_enhance",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3441,7 +3989,7 @@ def facefusion_task_enhance_face(
 def facefusion_task_enhance_frame(
     target_path: str,
     output_path: str,
-    preset: str = "frame_restore",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3453,6 +4001,7 @@ def facefusion_task_enhance_frame(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="frame_enhance",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3476,7 +4025,7 @@ def facefusion_task_enhance_frame(
 def facefusion_task_colorize_frames(
     target_path: str,
     output_path: str,
-    preset: str = "archive_colorize",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3488,6 +4037,7 @@ def facefusion_task_colorize_frames(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="frame_colorize",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3523,6 +4073,7 @@ def facefusion_task_edit_face(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="face_edit",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3558,6 +4109,7 @@ def facefusion_task_restore_expression(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="expression_restore",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3593,6 +4145,7 @@ def facefusion_task_modify_age(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="age_modify",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3616,7 +4169,7 @@ def facefusion_task_modify_age(
 def facefusion_task_debug_faces(
     target_path: str,
     output_path: str,
-    preset: str = "face_debug_overlay",
+    preset: str | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -3628,6 +4181,7 @@ def facefusion_task_debug_faces(
     python_path: str | None = None,
 ) -> dict[str, Any]:
     result = _run_task_shortcut(
+        task_kind="face_debug",
         source_paths=[],
         target_path=target_path,
         output_path=output_path,
@@ -3660,8 +4214,11 @@ def facefusion_benchmark(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    resolved = _resolve_preset_bundle(
+    resolved, effective_preset = _resolve_runtime_bundle(
         preset,
+        defaults_bucket="tool_defaults",
+        defaults_name="benchmark",
+        fallback_processors=None,
         processors=processors,
         execution=execution,
         output_options=None,
@@ -3699,7 +4256,7 @@ def facefusion_benchmark(
     result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
     return {
         **result,
-        "preset": preset,
+        "preset": effective_preset,
         "benchmark_options": benchmark_options or {},
     }
 
@@ -4290,6 +4847,9 @@ def facefusion_render_reference_ui(
     if not references_path.exists():
         raise ValueError(f"No references.json found for project_id: {project_id}")
     references = _read_json(references_path)
+    shots_path = project_dir / "shots.json"
+    if shots_path.exists():
+        references = {**references, "shots": (_read_json(shots_path).get("shots") or [])}
     resolved_output_path = Path(output_path) if output_path else project_dir / "manifests" / "reference-view.html"
     _ensure_directory(resolved_output_path.parent)
     resolved_output_path.write_text(_render_reference_html(references), encoding="utf-8")
@@ -4300,6 +4860,49 @@ def facefusion_render_reference_ui(
         "references": references,
         "cluster_count": len(references.get("clusters") or []),
         "group_count": len(references.get("decision_groups") or references.get("suggested_groups") or []),
+    }
+
+
+@mcp.tool(description="Apply optional per-shot pipeline operations such as lip sync, face enhancement, frame enhancement, background removal, expression restore, face edit, age modify, or colorization back into shots.json before plan build.", structured_output=True)
+def facefusion_apply_shot_operation_decisions(
+    project_id: str,
+    shot_operations: list[dict[str, Any]],
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    if not shot_operations:
+        raise ValueError("shot_operations must not be empty")
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    shots_path = project_dir / "shots.json"
+    shots_payload = _read_json(shots_path)
+    shots = shots_payload.get("shots") or []
+    shots_by_id = {shot["shot_id"]: shot for shot in shots}
+    updated_shots = []
+    for item in shot_operations:
+        shot_id = item.get("shot_id")
+        if not shot_id or shot_id not in shots_by_id:
+            raise ValueError(f"Unknown shot_id in shot_operations: {shot_id}")
+        shot = shots_by_id[shot_id]
+        enabled_operations = list(dict.fromkeys(item.get("enabled_operations") or []))
+        shot["operations"] = _shot_operation_decision_to_operations(shot, enabled_operations)
+        if item.get("notes"):
+            existing_notes = shot.get("notes", "")
+            shot["notes"] = f"{existing_notes} | {item['notes']}".strip(" |")
+        updated_shots.append(
+            {
+                "shot_id": shot_id,
+                "enabled_operations": enabled_operations,
+                "operation_types": [operation.get("operation_type") for operation in shot.get("operations") or []],
+                "operation_count": len(shot.get("operations") or []),
+            }
+        )
+    _write_json(shots_path, shots_payload)
+    return {
+        "project_id": project_id,
+        "shots_path": str(shots_path),
+        "updated_shot_count": len(updated_shots),
+        "updated_shots": updated_shots,
+        "shots": shots_payload,
     }
 
 
@@ -4609,14 +5212,22 @@ def resource_multi_actor_workflow() -> str:
 
 @mcp.prompt(name="run-facefusion-task", description="Route a normal media-processing request into the right FaceFusion tool sequence.")
 def prompt_run_facefusion_task() -> str:
-    return (
-        "Use FaceFusion Local to fulfill a direct media-processing request. "
-        "First decide whether the user wants a single task or a pattern-based batch. "
-        "If environment readiness is unknown, call facefusion_health_check. "
-        "If the task is missing models or looks like a first run, call facefusion_download_models. "
-        "Use facefusion://reference/processors and facefusion://recipes/common-workflows to choose processors. "
-        "Then call facefusion_run_job for one task or facefusion_batch_run for a batch. "
-        "Do not use job-management tools unless the user explicitly wants a queue or drafts."
+    ui_mode = _default_ui_mode()
+    return "".join(
+        [
+            "Use FaceFusion Local to fulfill a direct media-processing request. ",
+            "First decide whether the user wants a single task or a pattern-based batch. ",
+            "If environment readiness is unknown, call facefusion_health_check. ",
+            "If the task is missing models or looks like a first run, call facefusion_download_models. ",
+            "Use facefusion://reference/processors and facefusion://recipes/common-workflows to choose processors. ",
+            (
+                "The environment prefers UI mode by default, so when the request becomes multi-step or benefits from review, generate the initial draft state and render the relevant UI before continuing follow-up questions. "
+                if ui_mode
+                else "The environment prefers no-UI mode by default, so generate the initial draft state first and then continue by follow-up dialogue without requiring the user to use the HTML review pages. "
+            ),
+            "Then call facefusion_run_job for one task or facefusion_batch_run for a batch. ",
+            "Do not use job-management tools unless the user explicitly wants a queue or drafts.",
+        ]
     )
 
 
@@ -4635,14 +5246,22 @@ def prompt_prepare_facefusion_environment() -> str:
 
 @mcp.prompt(name="orchestrate-facefusion-jobs", description="Build and operate drafted, queued, or retried FaceFusion jobs.")
 def prompt_orchestrate_facefusion_jobs() -> str:
-    return (
-        "Use FaceFusion job tools for queue-oriented workflows. "
-        "For multi-actor workflows, first use facefusion_define_cast, facefusion_plan_shots, and facefusion_build_multi_actor_plan, then use facefusion_materialize_multi_actor_jobs. "
-        "Use facefusion_approve_preview to promote approved preview tasks into final work, and use facefusion_retry_failed_task for local recovery on only the affected task. "
-        "Otherwise create a draft with facefusion_create_job, then use facefusion_update_job_steps to add, insert, remix, or remove steps. "
-        "Inspect the queue with facefusion_manage_jobs. "
-        "Submit, run, or retry jobs with facefusion_run_jobs. "
-        "Prefer this path only when the user wants drafts, queues, retries, or step-by-step orchestration."
+    ui_mode = _default_ui_mode()
+    return "".join(
+        [
+            "Use FaceFusion job tools for queue-oriented workflows. ",
+            "For multi-actor workflows, first use facefusion_define_cast, facefusion_plan_shots, facefusion_discover_role_references, facefusion_apply_reference_decisions, facefusion_apply_shot_operation_decisions when needed, and facefusion_build_multi_actor_plan, then use facefusion_materialize_multi_actor_jobs. ",
+            (
+                "Because UI mode is the default in this environment, after the initial project draft is generated you should normally render reference-view.html and plan-view.html so the user can refine cast, merge, source, and shot-operation details visually, while still continuing the conversation to fill gaps. "
+                if ui_mode
+                else "Because no-UI mode is the default in this environment, after the initial project draft is generated you should continue by summarizing the current cast, references, optional shot operations, and plan state in conversation and asking focused follow-up questions until the missing details are filled. "
+            ),
+            "Use facefusion_approve_preview to promote approved preview tasks into final work, and use facefusion_retry_failed_task for local recovery on only the affected task. ",
+            "Otherwise create a draft with facefusion_create_job, then use facefusion_update_job_steps to add, insert, remix, or remove steps. ",
+            "Inspect the queue with facefusion_manage_jobs. ",
+            "Submit, run, or retry jobs with facefusion_run_jobs. ",
+            "Prefer this path only when the user wants drafts, queues, retries, or step-by-step orchestration.",
+        ]
     )
 
 
