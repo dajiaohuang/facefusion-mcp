@@ -22,6 +22,7 @@ It can also detect when FaceFusion is not installed or not fully set up yet, the
 - `17` executable MCP tools for:
   - health checks
   - install and setup automation
+  - optional NSFW-check bypass at plugin runtime
   - capability discovery
   - model downloads
   - one-off runs
@@ -165,6 +166,24 @@ The Python environment is created inside the chosen install root at:
 - `facefusion_materialize_multi_actor_jobs`
 - `facefusion_approve_preview`
 - `facefusion_retry_failed_task`
+
+## Plugin Runtime Options
+
+The plugin supports a plugin-level `skip_nsfw_check` switch.
+
+Use it when you want the plugin to launch FaceFusion through a wrapper that disables `facefusion.content_analyser` for that run without modifying the FaceFusion source tree.
+
+How to use it:
+
+- `facefusion_run_job`: pass `misc_options.skip_nsfw_check=true`
+- `facefusion_batch_run`: pass `misc_options.skip_nsfw_check=true`
+- `facefusion_run_jobs`: pass `skip_nsfw_check=true`
+
+Scope:
+
+- this is a plugin-only runtime behavior
+- it is not forwarded as a FaceFusion CLI flag
+- it applies only to runs launched through this plugin
 
 ## Resources
 

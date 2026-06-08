@@ -284,11 +284,36 @@ def _run_facefusion_command(
     command_args: list[str],
     facefusion_root: str | None = None,
     python_path: str | None = None,
+    skip_nsfw_check: bool = False,
 ) -> dict[str, Any]:
     root = _facefusion_root(facefusion_root)
     python_exe = _facefusion_python(facefusion_root, python_path)
+    if skip_nsfw_check:
+        argv_literal = repr(["facefusion.py", *command_args])
+        injected = (
+            f"import runpy, sys; sys.path.insert(0, r'{str(root)}'); "
+            "import facefusion.content_analyser as _content_analyser; "
+            "_content_analyser.analyse_stream = lambda *args, **kwargs: False; "
+            "_content_analyser.analyse_frame = lambda *args, **kwargs: False; "
+            "_content_analyser.analyse_image = lambda *args, **kwargs: False; "
+            "_content_analyser.analyse_video = lambda *args, **kwargs: False; "
+            "_content_analyser.detect_nsfw = lambda *args, **kwargs: False; "
+            "_content_analyser.detect_with_nsfw_1 = lambda *args, **kwargs: False; "
+            "_content_analyser.detect_with_nsfw_2 = lambda *args, **kwargs: False; "
+            "_content_analyser.detect_with_nsfw_3 = lambda *args, **kwargs: False; "
+            f"sys.argv = {argv_literal}; "
+            "runpy.run_path('facefusion.py', run_name='__main__')"
+        )
+        command = [str(python_exe), "-c", injected]
+        result = _run_subprocess(command, root)
+        result["effective_command_args"] = ["facefusion.py", *command_args]
+        result["skip_nsfw_check"] = True
+        return result
     command = [str(python_exe), "facefusion.py", *command_args]
-    return _run_subprocess(command, root)
+    result = _run_subprocess(command, root)
+    result["effective_command_args"] = ["facefusion.py", *command_args]
+    result["skip_nsfw_check"] = False
+    return result
 
 
 def _run_facefusion_code(
@@ -504,6 +529,12 @@ def _build_common_run_args(
     if extra_args:
         args.extend(str(item) for item in extra_args)
     return args
+
+
+def _extract_skip_nsfw_check(misc_options: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
+    normalized_misc = dict(misc_options or {})
+    skip_nsfw_check = bool(normalized_misc.pop("skip_nsfw_check", False))
+    return normalized_misc, skip_nsfw_check
 
 
 def _require_existing_file(path: str, field_name: str) -> None:
@@ -1007,6 +1038,7 @@ def facefusion_run_job(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
+    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(misc_options)
     for source_path in source_paths:
         _require_existing_file(source_path, "source_paths item")
     _require_existing_file(target_path, "target_path")
@@ -1021,14 +1053,14 @@ def facefusion_run_job(
             memory_options=memory_options,
             face_options=face_options,
             download_options=download_options,
-            misc_options=misc_options,
+            misc_options=normalized_misc_options,
             extra_args=extra_args,
             facefusion_root=facefusion_root,
             python_path=python_path,
             include_default_execution=True,
         )
     )
-    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
+    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
     normalized = {
         "source_paths": source_paths,
         "target_path": target_path,
@@ -1039,14 +1071,16 @@ def facefusion_run_job(
         "memory_options": memory_options or {},
         "face_options": face_options or {},
         "download_options": download_options or {},
-        "misc_options": misc_options or {"log_level": "info"},
+        "misc_options": normalized_misc_options or {"log_level": "info"},
         "extra_args": extra_args or [],
+        "skip_nsfw_check": skip_nsfw_check,
     }
     return {
         **result,
         "normalized_request": normalized,
         "output_path": output_path,
         "output_exists": Path(output_path).exists(),
+        "skip_nsfw_check": skip_nsfw_check,
     }
 
 
@@ -1066,6 +1100,7 @@ def facefusion_batch_run(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
+    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(misc_options)
     args = ["batch-run", "-s", source_pattern, "-t", target_pattern, "-o", output_pattern]
     args.extend(
         _build_common_run_args(
@@ -1075,14 +1110,14 @@ def facefusion_batch_run(
             memory_options=memory_options,
             face_options=face_options,
             download_options=download_options,
-            misc_options=misc_options,
+            misc_options=normalized_misc_options,
             extra_args=extra_args,
             facefusion_root=facefusion_root,
             python_path=python_path,
             include_default_execution=True,
         )
     )
-    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
+    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
     return {
         **result,
         "patterns": {
@@ -1090,6 +1125,7 @@ def facefusion_batch_run(
             "target_pattern": target_pattern,
             "output_pattern": output_pattern,
         },
+        "skip_nsfw_check": skip_nsfw_check,
     }
 
 
@@ -1237,6 +1273,7 @@ def facefusion_run_jobs(
     jobs_path: str | None = None,
     halt_on_error: bool = False,
     log_level: str = "info",
+    skip_nsfw_check: bool = False,
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
@@ -1261,11 +1298,12 @@ def facefusion_run_jobs(
     if halt_on_error:
         args.append("--halt-on-error")
     args.extend(["--log-level", log_level])
-    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
+    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
     return {
         **result,
         "mode": mode,
         "job_id": job_id,
+        "skip_nsfw_check": skip_nsfw_check,
     }
 
 

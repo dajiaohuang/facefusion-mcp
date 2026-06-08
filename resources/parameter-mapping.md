@@ -36,6 +36,7 @@
 ### Misc options
 - `log_level` -> `--log-level`
 - `halt_on_error` -> `--halt-on-error`
+- `skip_nsfw_check` is plugin-only and is not forwarded to FaceFusion as a CLI flag. The plugin uses it to launch FaceFusion through a wrapper that disables `content_analyser` for that run.
 
 ### Face and processor options
 - Any `snake_case` option under `face_options` is forwarded as a flag using the same conversion rule.
@@ -48,6 +49,7 @@
 - `facefusion_create_job`: `job_id`
 - `facefusion_update_job_steps`: `action`, `job_id`, and sometimes `step_index`
 - `facefusion_run_jobs`: `mode`, and `job_id` for single-job modes
+- `facefusion_run_jobs` also accepts plugin-level `skip_nsfw_check`
 
 ## `extra_args`
 

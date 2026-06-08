@@ -22,6 +22,7 @@ Use this skill to turn a normal FaceFusion media-processing request into the rig
 - Prefer `facefusion_batch_run` only when the request is clearly pattern-based or directory-scale.
 - Do not use job-management tools unless the user explicitly asks for drafts, queues, retries, or multi-step orchestration.
 - Respect the MCP overwrite guard. If the output path already exists, choose a new output path or set `overwrite=true` only when the user clearly intends replacement.
+- Use `misc_options.skip_nsfw_check=true` only when the user explicitly asks to bypass FaceFusion NSFW detection.
 
 ## Defaults
 

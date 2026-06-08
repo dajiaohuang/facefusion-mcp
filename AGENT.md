@@ -49,6 +49,7 @@ Use this guide when operating as an agent against the local plugin.
 - Never call `facefusion_install_or_setup` until the user explicitly confirms installation or setup.
 - Do not overwrite existing outputs unless the user clearly wants replacement.
 - Do not delete queued jobs without clear user intent.
+- Use `skip_nsfw_check` only when the user explicitly asks to bypass FaceFusion NSFW detection.
 
 ## Install Path Rules
 
@@ -81,6 +82,14 @@ Prefer these processor starting points:
 - lip sync: `lip_syncer`
 - cutout: `background_remover`
 - frame cleanup: `frame_enhancer`
+
+Plugin runtime overrides:
+
+- `facefusion_run_job`: `misc_options.skip_nsfw_check=true`
+- `facefusion_batch_run`: `misc_options.skip_nsfw_check=true`
+- `facefusion_run_jobs`: `skip_nsfw_check=true`
+
+This wrapper-based override only affects plugin-launched runs and does not patch the FaceFusion source tree on disk.
 
 ## Multi-Actor Workflow
 

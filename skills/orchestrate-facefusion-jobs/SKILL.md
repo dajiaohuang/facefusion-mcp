@@ -28,6 +28,7 @@ Use this skill when the user needs queue-style job management instead of a one-o
 - Use `facefusion_retry_failed_task` for local recovery before rebuilding an entire project plan.
 - Use `facefusion_manage_jobs(action="list")` to show state before destructive deletes.
 - Require clear intent before calling delete actions.
+- Use `facefusion_run_jobs(skip_nsfw_check=true)` only when the user explicitly asks to bypass FaceFusion NSFW detection for queued work.
 
 ## References
 
