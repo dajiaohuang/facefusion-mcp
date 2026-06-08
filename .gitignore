@@ -9,3 +9,5 @@ __pycache__/
 .jobs/
 facefusion.env.json
 Thumbs.db
+test/*
+!test/.gitkeep

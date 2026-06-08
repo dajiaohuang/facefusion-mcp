@@ -1,6 +1,6 @@
 # FaceFusion MCP
 
-MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on conversational multi-actor and multi-face orchestration, preview approval, shot-level retry workflows, and confirmation-gated install/setup when FaceFusion is missing.
+MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on both headless execution and interactive UI launch, broader FaceFusion capability exposure, reusable presets, conversational multi-actor and multi-face orchestration, plan visualization, preview approval, shot-level retry workflows, and confirmation-gated install/setup when FaceFusion is missing.
 
 ## Featured Workflow
 
@@ -15,17 +15,23 @@ FaceFusion MCP is built for more than one-off swaps. Its standout workflow is co
 
 This makes it practical for an agent to coordinate multi-role, multi-face projects with a `cast -> shots -> preview -> approval -> retry` loop instead of forcing users to hand-author large FaceFusion command lines.
 
+After `plan.json` is generated, the plugin can also render a standalone HTML plan viewer so the queue is easy to inspect in a browser before previews are approved or finals are promoted.
+
 It can also detect when FaceFusion is not installed or not fully set up yet, then propose an install/setup plan and only execute it after explicit confirmation.
 
 ## What It Provides
 
-- `17` executable MCP tools for:
+- `31` executable MCP tools for:
   - health checks
   - install and setup automation
   - optional NSFW-check bypass at plugin runtime
-  - capability discovery
+  - expanded capability discovery
+  - preset discovery
+  - queue and worker status checks
+  - task-oriented face swap, lip sync, enhancement, colorization, cutout, editing, aging, and debugging shortcuts
   - model downloads
-  - one-off runs
+  - one-off headless runs
+  - interactive UI launch
   - batch runs
   - benchmarks
   - job creation
@@ -35,10 +41,11 @@ It can also detect when FaceFusion is not installed or not fully set up yet, the
   - multi-actor cast definition
   - multi-actor shot planning
   - multi-actor plan building
+  - multi-actor plan visualization
   - multi-actor job materialization
   - preview approval
   - failed task retry
-- `7` reference resources for:
+- `8` reference resources for:
   - commands
   - processors
   - execution providers
@@ -46,6 +53,7 @@ It can also detect when FaceFusion is not installed or not fully set up yet, the
   - common workflows
   - troubleshooting
   - multi-actor workflow
+  - presets
 - `4` prompts for:
   - direct task execution
   - environment preparation
@@ -152,8 +160,21 @@ The Python environment is created inside the chosen install root at:
 - `facefusion_health_check`
 - `facefusion_install_or_setup`
 - `facefusion_list_capabilities`
+- `facefusion_list_presets`
+- `facefusion_check_queue`
 - `facefusion_download_models`
+- `facefusion_task_face_swap`
+- `facefusion_task_lip_sync`
+- `facefusion_task_remove_background`
+- `facefusion_task_enhance_face`
+- `facefusion_task_enhance_frame`
+- `facefusion_task_colorize_frames`
+- `facefusion_task_edit_face`
+- `facefusion_task_restore_expression`
+- `facefusion_task_modify_age`
+- `facefusion_task_debug_faces`
 - `facefusion_run_job`
+- `facefusion_launch_ui`
 - `facefusion_batch_run`
 - `facefusion_benchmark`
 - `facefusion_create_job`
@@ -163,6 +184,7 @@ The Python environment is created inside the chosen install root at:
 - `facefusion_define_cast`
 - `facefusion_plan_shots`
 - `facefusion_build_multi_actor_plan`
+- `facefusion_render_plan_ui`
 - `facefusion_materialize_multi_actor_jobs`
 - `facefusion_approve_preview`
 - `facefusion_retry_failed_task`
@@ -176,6 +198,7 @@ Use it when you want the plugin to launch FaceFusion through a wrapper that disa
 How to use it:
 
 - `facefusion_run_job`: pass `misc_options.skip_nsfw_check=true`
+- `facefusion_launch_ui`: pass `misc_options.skip_nsfw_check=true`
 - `facefusion_batch_run`: pass `misc_options.skip_nsfw_check=true`
 - `facefusion_run_jobs`: pass `skip_nsfw_check=true`
 
@@ -184,6 +207,87 @@ Scope:
 - this is a plugin-only runtime behavior
 - it is not forwarded as a FaceFusion CLI flag
 - it applies only to runs launched through this plugin
+
+## Head And Headless
+
+- Prefer the `facefusion_task_*` tools for normal work.
+- Use `facefusion_run_job` for a direct non-UI execution path that maps to `headless-run`.
+- Use `facefusion_launch_ui` when you want FaceFusion's interactive `run` mode, optionally with `--open-browser`, `--ui-layouts`, `--ui-workflow`, and prefilled source/target paths.
+- Use `dry_run=true` on `facefusion_launch_ui` when you want to inspect the exact launch command before opening the UI.
+
+## Task Shortcuts
+
+The MCP surface now prefers task-oriented shortcut tools over raw parameter assembly.
+
+Primary task tools:
+
+- `facefusion_task_face_swap`
+- `facefusion_task_lip_sync`
+- `facefusion_task_remove_background`
+- `facefusion_task_enhance_face`
+- `facefusion_task_enhance_frame`
+- `facefusion_task_colorize_frames`
+- `facefusion_task_edit_face`
+- `facefusion_task_restore_expression`
+- `facefusion_task_modify_age`
+- `facefusion_task_debug_faces`
+
+These tools still route through the same validated execution core, but give the agent cleaner task entrypoints.
+
+## Full Capability Surface
+
+`facefusion_list_capabilities` now exposes more than commands and processor names.
+
+It can enumerate:
+
+- commands
+- processors
+- execution providers
+- encoders
+- UI layouts and workflows
+- download providers and scopes
+- memory strategies and runtime ranges
+- benchmark modes and resolutions
+- face detection, selection, masking, and voice-extractor choices
+- processor-specific model choices
+- MCP presets
+
+Use `category="all"` for the full catalog.
+
+## Presets
+
+Use `facefusion_list_presets` to inspect the built-in preset library.
+
+The following tools accept `preset`:
+
+- `facefusion_run_job`
+- `facefusion_launch_ui`
+- `facefusion_batch_run`
+- `facefusion_benchmark`
+
+Explicit request fields override preset defaults.
+
+## Plan Viewer
+
+For multi-actor projects, once `facefusion_build_multi_actor_plan` writes `plan.json`, you can call `facefusion_render_plan_ui`.
+
+It reads:
+
+- `cast.json`
+- `shots.json`
+- `plan.json`
+
+and writes a standalone HTML file by default to:
+
+- `<project_dir>/manifests/plan-view.html`
+
+The generated page shows:
+
+- cast and source-asset overview
+- shot list and operations
+- task cards for previews and finals
+- status, processors, risk, provider, and output-path summaries
+- quick filtering by task type and status
 
 ## Resources
 
@@ -194,6 +298,7 @@ Scope:
 - `facefusion://recipes/common-workflows`
 - `facefusion://reference/troubleshooting`
 - `facefusion://recipes/multi-actor-workflow`
+- `facefusion://reference/presets`
 
 ## Prompts
 

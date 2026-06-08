@@ -242,6 +242,10 @@ Output:
 
 - `plan.json`
 
+Optional review layer:
+
+- render `manifests/plan-view.html` with `facefusion_render_plan_ui` when the user wants a browser-friendly plan review before job materialization or preview approval
+
 ### Phase 4: queue execution
 
 The agent turns plan tasks into FaceFusion jobs:

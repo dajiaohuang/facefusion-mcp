@@ -25,6 +25,7 @@
 ## When to use each command family
 
 - Use `headless-run` for a single direct task with explicit paths.
+- Use `run` when the user wants the interactive UI, browser launch, or a workflow they will adjust manually.
 - Use `batch-run` when source, target, or output inputs are best expressed as file patterns.
 - Use `force-download` when the machine is missing models or has corrupt downloads.
 - Use `benchmark` when the user cares about speed, provider selection, or memory tradeoffs.
@@ -33,6 +34,7 @@
 ## MCP mapping
 
 - `facefusion_run_job` -> `headless-run`
+- `facefusion_launch_ui` -> `run`
 - `facefusion_batch_run` -> `batch-run`
 - `facefusion_download_models` -> `force-download`
 - `facefusion_benchmark` -> `benchmark`
@@ -40,3 +42,4 @@
 - `facefusion_update_job_steps` -> `job-add-step`, `job-insert-step`, `job-remix-step`, `job-remove-step`
 - `facefusion_run_jobs` -> `job-submit`, `job-submit-all`, `job-run`, `job-run-all`, `job-retry`, `job-retry-all`
 - `facefusion_manage_jobs` -> `job-list`, `job-delete`, `job-delete-all`
+- `facefusion_render_plan_ui` -> plugin-native HTML renderer for `plan.json`

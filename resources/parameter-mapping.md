@@ -44,12 +44,50 @@
 
 ## Tool-specific required fields
 
+- Task shortcuts:
+  - `facefusion_task_face_swap`: `source_paths`, `target_path`, `output_path`
+  - `facefusion_task_lip_sync`: `source_audio_paths`, `target_path`, `output_path`
+  - `facefusion_task_remove_background`: `target_path`, `output_path`
+  - `facefusion_task_enhance_face`: `target_path`, `output_path`
+  - `facefusion_task_enhance_frame`: `target_path`, `output_path`
+  - `facefusion_task_colorize_frames`: `target_path`, `output_path`
+  - `facefusion_task_edit_face`: `target_path`, `output_path`
+  - `facefusion_task_restore_expression`: `target_path`, `output_path`
+  - `facefusion_task_modify_age`: `target_path`, `output_path`
+  - `facefusion_task_debug_faces`: `target_path`, `output_path`
 - `facefusion_run_job`: `source_paths`, `target_path`, `output_path`
+- `facefusion_run_job` also accepts optional `preset`
+- `facefusion_launch_ui`: no required media fields; accepts optional `source_paths`, `target_path`, `output_path`, `open_browser`, `ui_layouts[]`, `ui_workflow`, and `dry_run`
+- `facefusion_launch_ui` also accepts optional `preset`
 - `facefusion_batch_run`: `source_pattern`, `target_pattern`, `output_pattern`
+- `facefusion_batch_run` also accepts optional `preset`
+- `facefusion_benchmark` also accepts optional `preset`
 - `facefusion_create_job`: `job_id`
 - `facefusion_update_job_steps`: `action`, `job_id`, and sometimes `step_index`
 - `facefusion_run_jobs`: `mode`, and `job_id` for single-job modes
 - `facefusion_run_jobs` also accepts plugin-level `skip_nsfw_check`
+- `facefusion_render_plan_ui`: `project_id`, with optional `output_path`
+
+## Capability discovery
+
+- `facefusion_list_capabilities(category="all")` exposes:
+  - commands
+  - processors
+  - providers
+  - encoders
+  - UI layouts and workflows
+  - download choices
+  - memory and benchmark ranges
+  - face option enums and ranges
+  - processor-specific model choices
+  - presets
+- `facefusion_list_presets()` returns the built-in MCP preset library.
+
+## Presets
+
+- Presets are MCP-side default bundles layered over the normal request groups.
+- Explicit request fields override preset defaults.
+- See `facefusion://reference/presets` for the curated preset set.
 
 ## `extra_args`
 

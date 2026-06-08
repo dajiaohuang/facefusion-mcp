@@ -1,7 +1,7 @@
 {
   "name": "facefusion-local",
   "version": "0.1.0",
-  "description": "Run FaceFusion workflows through MCP tools, resources, and prompts, including confirmation-gated install/setup and multi-actor orchestration.",
+  "description": "Run FaceFusion workflows through MCP tools, resources, and prompts, including fuller capability exposure, built-in presets, headless execution, interactive UI launch, plan visualization, confirmation-gated install/setup, and multi-actor orchestration.",
   "author": {
     "name": "Local developer"
   },
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "FaceFusion MCP",
-    "shortDescription": "Drive FaceFusion from Codex on this machine.",
-    "longDescription": "FaceFusion MCP exposes a local FaceFusion installation as an MCP server with executable tools, stable reference resources, and workflow prompts for environment prep, confirmation-gated install/setup, media processing, job orchestration, and troubleshooting.",
+    "shortDescription": "Drive FaceFusion from Codex with headless and UI workflows.",
+    "longDescription": "FaceFusion MCP exposes a local FaceFusion installation as an MCP server with executable tools, stable reference resources, and workflow prompts for environment prep, confirmation-gated install/setup, direct media processing, expanded capability discovery, reusable presets, interactive UI launch, multi-actor plan visualization, job orchestration, and troubleshooting.",
     "developerName": "Local developer",
     "category": "Developer Tools",
     "capabilities": [

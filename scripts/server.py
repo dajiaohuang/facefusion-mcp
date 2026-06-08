@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import venv
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 RESOURCE_DIR = PLUGIN_ROOT / "resources"
 ENV_CONFIG_PATH = PLUGIN_ROOT / "facefusion.env.json"
+RUNNER_STATE_PATH = PLUGIN_ROOT / "facefusion.runner.json"
 DEFAULT_COMMANDS = [
     "run",
     "headless-run",
@@ -106,6 +109,126 @@ MULTI_ACTOR_OPERATION_PROFILES: dict[str, dict[str, Any]] = {
         "preview_default": False,
     },
 }
+PRESET_LIBRARY: dict[str, dict[str, Any]] = {
+    "fast_preview_swap": {
+        "description": "Fast preview-oriented face swap with lighter memory usage and quick video encoding.",
+        "processors": ["face_swapper"],
+        "execution": {"providers": ["cuda"], "thread_count": 1},
+        "output_options": {"video_preset": "veryfast", "video_quality": 60},
+        "memory_options": {"video_memory_strategy": "strict"},
+        "face_options": {
+            "face_detector_model": "retinaface",
+            "face_selector_mode": "one",
+            "face_mask_types": ["box", "occlusion"],
+        },
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["quick previews", "approval passes", "single-face video checks"],
+    },
+    "balanced_face_swap": {
+        "description": "Balanced default for general image or video face swapping.",
+        "processors": ["face_swapper", "face_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"video_preset": "medium", "video_quality": 80},
+        "memory_options": {"video_memory_strategy": "moderate"},
+        "face_options": {
+            "face_detector_model": "retinaface",
+            "face_selector_mode": "one",
+            "face_mask_types": ["box", "occlusion", "region"],
+        },
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["default direct swaps", "most local tasks"],
+    },
+    "quality_face_swap": {
+        "description": "Higher-quality swap preset with more expensive restoration defaults.",
+        "processors": ["face_swapper", "face_enhancer", "frame_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"video_preset": "slow", "video_quality": 90},
+        "memory_options": {"video_memory_strategy": "tolerant"},
+        "face_options": {
+            "face_detector_model": "retinaface",
+            "face_selector_mode": "reference",
+            "face_mask_types": ["box", "occlusion", "region"],
+        },
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["final renders", "higher-detail shots", "multi-face review-approved work"],
+    },
+    "multi_face_reference": {
+        "description": "Reference-tracking oriented preset for multi-face or same-frame role swaps.",
+        "processors": ["face_swapper", "face_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "memory_options": {"video_memory_strategy": "moderate"},
+        "face_options": {
+            "face_selector_mode": "reference",
+            "face_selector_order": "left-right",
+            "face_mask_types": ["box", "occlusion", "region"],
+            "reference_face_distance": 0.6,
+        },
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["same-frame multi-face swaps", "multi-actor shots"],
+    },
+    "lip_sync_clean": {
+        "description": "Lip-sync focused preset with conservative masking and face cleanup.",
+        "processors": ["lip_syncer", "face_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"video_preset": "medium", "video_quality": 82},
+        "memory_options": {"video_memory_strategy": "moderate"},
+        "face_options": {
+            "face_selector_mode": "one",
+            "face_mask_types": ["box", "occlusion", "area"],
+            "face_mask_areas": ["mouth"],
+        },
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["talking-head lip sync", "single speaking role shots"],
+    },
+    "portrait_enhance": {
+        "description": "Portrait cleanup preset for face restoration without identity transfer.",
+        "processors": ["face_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"image_quality": 95},
+        "memory_options": {"video_memory_strategy": "moderate"},
+        "face_options": {"face_selector_mode": "many"},
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["portrait cleanup", "restoration passes"],
+    },
+    "frame_restore": {
+        "description": "Whole-frame enhancement preset for video upscaling and cleanup.",
+        "processors": ["frame_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"video_preset": "medium", "video_quality": 88},
+        "memory_options": {"video_memory_strategy": "tolerant"},
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["global frame cleanup", "video restoration"],
+    },
+    "background_cutout": {
+        "description": "Background removal preset for subject isolation and cutout tasks.",
+        "processors": ["background_remover"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"image_quality": 95},
+        "memory_options": {"video_memory_strategy": "moderate"},
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["cutouts", "subject isolation", "background removal"],
+    },
+    "archive_colorize": {
+        "description": "Frame colorization preset for grayscale or archival material.",
+        "processors": ["frame_colorizer", "frame_enhancer"],
+        "execution": {"providers": ["cuda"]},
+        "output_options": {"video_preset": "medium", "video_quality": 85},
+        "memory_options": {"video_memory_strategy": "tolerant"},
+        "misc_options": {"log_level": "info"},
+        "recommended_for": ["archive colorization", "grayscale footage"],
+    },
+    "face_debug_overlay": {
+        "description": "Debug visualization preset for bounding boxes, landmarks, and mask inspection.",
+        "processors": ["face_debugger"],
+        "execution": {"providers": ["cpu"]},
+        "face_options": {
+            "face_debugger_items": ["bounding-box", "face-landmark-5", "face-mask"],
+            "face_mask_types": ["box", "occlusion", "region"],
+        },
+        "misc_options": {"log_level": "debug"},
+        "recommended_for": ["detector debugging", "mask inspection", "pipeline troubleshooting"],
+    },
+}
 RESOURCE_URIS = {
     "facefusion://reference/commands": RESOURCE_DIR / "commands.md",
     "facefusion://reference/processors": RESOURCE_DIR / "processors.md",
@@ -114,6 +237,7 @@ RESOURCE_URIS = {
     "facefusion://recipes/common-workflows": RESOURCE_DIR / "common-workflows.md",
     "facefusion://reference/troubleshooting": RESOURCE_DIR / "troubleshooting.md",
     "facefusion://recipes/multi-actor-workflow": RESOURCE_DIR / "multi-actor-workflow.md",
+    "facefusion://reference/presets": RESOURCE_DIR / "presets.md",
 }
 
 mcp = FastMCP(
@@ -142,6 +266,96 @@ def _read_env_config() -> dict[str, Any]:
 
 def _write_env_config(payload: dict[str, Any]) -> None:
     ENV_CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _default_skip_nsfw_check() -> bool:
+    return bool(_read_env_config().get("default_skip_nsfw_check", False))
+
+
+def _default_enqueue_tasks() -> bool:
+    return bool(_read_env_config().get("default_enqueue_tasks", False))
+
+
+def _default_background_queue_runner() -> bool:
+    return bool(_read_env_config().get("default_background_queue_runner", False))
+
+
+def _read_runner_state() -> dict[str, Any]:
+    if not RUNNER_STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(RUNNER_STATE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_runner_state(payload: dict[str, Any]) -> None:
+    RUNNER_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _clear_runner_state() -> None:
+    try:
+        RUNNER_STATE_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        result = _run_subprocess(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            cwd=PLUGIN_ROOT,
+        )
+        text = (result.get("stdout") or "") + (result.get("stderr") or "")
+        return str(pid) in text and "No tasks are running" not in text
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _get_active_runner_state() -> dict[str, Any]:
+    state = _read_runner_state()
+    status = str(state.get("status", ""))
+    started_at = float(state.get("started_at", 0) or 0)
+    if status == "starting" and started_at and (time.time() - started_at) < 15:
+        return state
+    pid = int(state.get("pid", 0) or 0)
+    if pid and _pid_is_running(pid):
+        return state
+    if state:
+        _clear_runner_state()
+    return {}
+
+
+def _list_jobs_by_status(
+    status: str,
+    *,
+    jobs_path: str | None,
+    log_level: str,
+    facefusion_root: str | None,
+    python_path: str | None,
+) -> dict[str, Any]:
+    args = ["job-list", status, "--log-level", log_level]
+    if jobs_path:
+        args.extend(["--jobs-path", jobs_path])
+    return _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
+
+
+def _count_job_rows(text: str) -> int:
+    count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        lowered = stripped.lower()
+        if "job id" in lowered or set(stripped) <= {"|", "-", "+", " "}:
+            continue
+        count += 1
+    return count
 
 
 def _detect_default_facefusion_root() -> Path:
@@ -231,6 +445,12 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_optional_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return _read_json(path)
+
+
 def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
@@ -280,16 +500,101 @@ def _run_subprocess(command: list[str], cwd: Path, env: dict[str, str] | None = 
     }
 
 
-def _run_facefusion_command(
-    command_args: list[str],
-    facefusion_root: str | None = None,
-    python_path: str | None = None,
-    skip_nsfw_check: bool = False,
-) -> dict[str, Any]:
-    root = _facefusion_root(facefusion_root)
-    python_exe = _facefusion_python(facefusion_root, python_path)
+def _launch_subprocess(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> dict[str, Any]:
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 127,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+        }
+    except OSError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 1,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+        }
+    return {
+        "command": command,
+        "cwd": str(cwd),
+        "pid": process.pid,
+        "return_code": None,
+        "stdout": "",
+        "stderr": "",
+        "stdout_summary": "",
+        "stderr_summary": "",
+        "success": True,
+    }
+
+
+def _launch_subprocess_background(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> dict[str, Any]:
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            env=env,
+            creationflags=creationflags,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 127,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+            "background": True,
+        }
+    except OSError as exc:
+        return {
+            "command": command,
+            "cwd": str(cwd),
+            "return_code": 1,
+            "stdout": "",
+            "stderr": str(exc),
+            "stdout_summary": "",
+            "stderr_summary": str(exc),
+            "success": False,
+            "background": True,
+        }
+    return {
+        "command": command,
+        "cwd": str(cwd),
+        "pid": process.pid,
+        "return_code": None,
+        "stdout": "",
+        "stderr": "",
+        "stdout_summary": "",
+        "stderr_summary": "",
+        "success": True,
+        "background": True,
+    }
+
+
+def _build_facefusion_process_command(root: Path, python_exe: Path, command_args: list[str], skip_nsfw_check: bool) -> tuple[list[str], list[str]]:
+    effective_command_args = ["facefusion.py", *command_args]
     if skip_nsfw_check:
-        argv_literal = repr(["facefusion.py", *command_args])
+        argv_literal = repr(effective_command_args)
         injected = (
             f"import runpy, sys; sys.path.insert(0, r'{str(root)}'); "
             "import facefusion.content_analyser as _content_analyser; "
@@ -304,15 +609,22 @@ def _run_facefusion_command(
             f"sys.argv = {argv_literal}; "
             "runpy.run_path('facefusion.py', run_name='__main__')"
         )
-        command = [str(python_exe), "-c", injected]
-        result = _run_subprocess(command, root)
-        result["effective_command_args"] = ["facefusion.py", *command_args]
-        result["skip_nsfw_check"] = True
-        return result
-    command = [str(python_exe), "facefusion.py", *command_args]
+        return [str(python_exe), "-c", injected], effective_command_args
+    return [str(python_exe), *effective_command_args], effective_command_args
+
+
+def _run_facefusion_command(
+    command_args: list[str],
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+    skip_nsfw_check: bool = False,
+) -> dict[str, Any]:
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    command, effective_command_args = _build_facefusion_process_command(root, python_exe, command_args, skip_nsfw_check)
     result = _run_subprocess(command, root)
-    result["effective_command_args"] = ["facefusion.py", *command_args]
-    result["skip_nsfw_check"] = False
+    result["effective_command_args"] = effective_command_args
+    result["skip_nsfw_check"] = skip_nsfw_check
     return result
 
 
@@ -365,6 +677,61 @@ def _flat_options_to_args(values: dict[str, Any] | None, rename: dict[str, str] 
     args: list[str] = []
     _append_flat_options(args, values, rename=rename)
     return args
+
+
+def _merge_option_dict(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
+    merged = dict(base or {})
+    for key, value in (override or {}).items():
+        merged[key] = value
+    return merged
+
+
+def _merge_list(base: list[Any] | None, override: list[Any] | None) -> list[Any]:
+    if override is not None:
+        return list(override)
+    if base is not None:
+        return list(base)
+    return []
+
+
+def _resolve_preset_bundle(
+    preset: str | None,
+    *,
+    processors: list[str] | None,
+    execution: dict[str, Any] | None,
+    output_options: dict[str, Any] | None,
+    memory_options: dict[str, Any] | None,
+    face_options: dict[str, Any] | None,
+    download_options: dict[str, Any] | None,
+    misc_options: dict[str, Any] | None,
+    extra_args: list[str] | None,
+) -> dict[str, Any]:
+    if not preset:
+        return {
+            "preset": None,
+            "processors": list(processors or []),
+            "execution": dict(execution or {}),
+            "output_options": dict(output_options or {}),
+            "memory_options": dict(memory_options or {}),
+            "face_options": dict(face_options or {}),
+            "download_options": dict(download_options or {}),
+            "misc_options": dict(misc_options or {}),
+            "extra_args": list(extra_args or []),
+        }
+    if preset not in PRESET_LIBRARY:
+        raise ValueError(f"Unknown preset: {preset}")
+    preset_payload = PRESET_LIBRARY[preset]
+    return {
+        "preset": preset,
+        "processors": _merge_list(preset_payload.get("processors"), processors),
+        "execution": _merge_option_dict(preset_payload.get("execution"), execution),
+        "output_options": _merge_option_dict(preset_payload.get("output_options"), output_options),
+        "memory_options": _merge_option_dict(preset_payload.get("memory_options"), memory_options),
+        "face_options": _merge_option_dict(preset_payload.get("face_options"), face_options),
+        "download_options": _merge_option_dict(preset_payload.get("download_options"), download_options),
+        "misc_options": _merge_option_dict(preset_payload.get("misc_options"), misc_options),
+        "extra_args": _merge_list(preset_payload.get("extra_args"), extra_args),
+    }
 
 
 def _parse_json_stdout(result: dict[str, Any], fallback: Any) -> Any:
@@ -457,6 +824,99 @@ def _available_encoders(facefusion_root: str | None = None, python_path: str | N
     return _parse_json_stdout(result, {})
 
 
+def _available_choice_catalog(facefusion_root: str | None = None, python_path: str | None = None) -> dict[str, Any]:
+    result = _run_facefusion_code(
+        """
+import json
+from pathlib import Path
+import facefusion.choices as c
+from facefusion.processors.modules.age_modifier import choices as age_modifier_choices
+from facefusion.processors.modules.background_remover import choices as background_remover_choices
+from facefusion.processors.modules.deep_swapper import choices as deep_swapper_choices
+from facefusion.processors.modules.expression_restorer import choices as expression_restorer_choices
+from facefusion.processors.modules.face_debugger import choices as face_debugger_choices
+from facefusion.processors.modules.face_editor import choices as face_editor_choices
+from facefusion.processors.modules.face_enhancer import choices as face_enhancer_choices
+from facefusion.processors.modules.face_swapper import choices as face_swapper_choices
+from facefusion.processors.modules.frame_colorizer import choices as frame_colorizer_choices
+from facefusion.processors.modules.frame_enhancer import choices as frame_enhancer_choices
+from facefusion.processors.modules.lip_syncer import choices as lip_syncer_choices
+ui_layouts = sorted(
+    path.stem for path in Path('facefusion/uis/layouts').glob('*.py')
+    if path.stem != '__init__'
+)
+catalog = {
+    'ui_layouts': ui_layouts,
+    'ui_workflows': c.ui_workflows,
+    'download_providers': c.download_providers,
+    'download_scopes': c.download_scopes,
+    'video_memory_strategies': c.video_memory_strategies,
+    'log_levels': c.log_levels,
+    'benchmark_modes': c.benchmark_modes,
+    'benchmark_resolutions': c.benchmark_resolutions,
+    'benchmark_cycle_count_range': list(c.benchmark_cycle_count_range),
+    'execution_thread_count_range': list(c.execution_thread_count_range),
+    'system_memory_limit_range': list(c.system_memory_limit_range),
+    'face': {
+        'detector_models': c.face_detector_models,
+        'detector_sizes_by_model': c.face_detector_set,
+        'detector_angles': list(c.face_detector_angles),
+        'detector_score_range': list(c.face_detector_score_range),
+        'detector_margin_range': list(c.face_detector_margin_range),
+        'landmarker_models': c.face_landmarker_models,
+        'landmarker_score_range': list(c.face_landmarker_score_range),
+        'selector_modes': c.face_selector_modes,
+        'selector_orders': c.face_selector_orders,
+        'selector_genders': c.face_selector_genders,
+        'selector_races': c.face_selector_races,
+        'selector_age_range': list(c.face_selector_age_range),
+        'reference_face_distance_range': list(c.reference_face_distance_range),
+        'occluder_models': c.face_occluder_models,
+        'parser_models': c.face_parser_models,
+        'mask_types': c.face_mask_types,
+        'mask_areas': c.face_mask_areas,
+        'mask_regions': c.face_mask_regions,
+        'mask_blur_range': list(c.face_mask_blur_range),
+        'mask_padding_range': list(c.face_mask_padding_range),
+        'voice_extractor_models': c.voice_extractor_models,
+    },
+    'output': {
+        'audio_encoders': c.output_audio_encoders,
+        'video_encoders': c.output_video_encoders,
+        'video_presets': c.output_video_presets,
+        'image_formats': c.image_formats,
+        'audio_formats': c.audio_formats,
+        'video_formats': c.video_formats,
+        'temp_frame_formats': c.temp_frame_formats,
+        'image_quality_range': list(c.output_image_quality_range),
+        'image_scale_range': list(c.output_image_scale_range),
+        'audio_quality_range': list(c.output_audio_quality_range),
+        'audio_volume_range': list(c.output_audio_volume_range),
+        'video_quality_range': list(c.output_video_quality_range),
+        'video_scale_range': list(c.output_video_scale_range),
+    },
+    'processor_models': {
+        'age_modifier_models': age_modifier_choices.age_modifier_models,
+        'background_remover_models': background_remover_choices.background_remover_models,
+        'deep_swapper_models': deep_swapper_choices.deep_swapper_models,
+        'expression_restorer_models': expression_restorer_choices.expression_restorer_models,
+        'face_debugger_items': face_debugger_choices.face_debugger_items,
+        'face_editor_models': face_editor_choices.face_editor_models,
+        'face_enhancer_models': face_enhancer_choices.face_enhancer_models,
+        'face_swapper_models': face_swapper_choices.face_swapper_models,
+        'frame_colorizer_models': frame_colorizer_choices.frame_colorizer_models,
+        'frame_enhancer_models': frame_enhancer_choices.frame_enhancer_models,
+        'lip_syncer_models': lip_syncer_choices.lip_syncer_models,
+    },
+}
+print(json.dumps(catalog, ensure_ascii=False))
+""",
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    return _parse_json_stdout(result, {})
+
+
 def _default_provider(facefusion_root: str | None = None, python_path: str | None = None) -> list[str]:
     providers = _available_providers(facefusion_root=facefusion_root, python_path=python_path)
     if "cuda" in providers:
@@ -533,7 +993,8 @@ def _build_common_run_args(
 
 def _extract_skip_nsfw_check(misc_options: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     normalized_misc = dict(misc_options or {})
-    skip_nsfw_check = bool(normalized_misc.pop("skip_nsfw_check", False))
+    default_skip = _default_skip_nsfw_check()
+    skip_nsfw_check = bool(normalized_misc.pop("skip_nsfw_check", default_skip))
     return normalized_misc, skip_nsfw_check
 
 
@@ -670,7 +1131,7 @@ def _normalize_shot(index: int, shot: dict[str, Any], auto_preview_policy: str) 
             _normalize_operation(operation_index, operation, roles, bool(preview_required), risk_level)
             for operation_index, operation in enumerate(operations, start=1)
         ]
-    else:
+    elif roles:
         normalized["operations"] = [
             _normalize_operation(
                 1,
@@ -680,6 +1141,8 @@ def _normalize_shot(index: int, shot: dict[str, Any], auto_preview_policy: str) 
                 risk_level,
             )
         ]
+    else:
+        normalized["operations"] = []
     _require_existing_file(normalized["target_path"], "shot.target_path")
     return normalized
 
@@ -700,12 +1163,92 @@ def _coerce_frame_bound(value: Any) -> int:
     return int(float(str(value)))
 
 
-def _build_task_step_request(
+def _job_step_output_path(job_id: str, step_index: int, output_path: str) -> str:
+    output_file_path = Path(output_path)
+    return str(output_file_path.with_name(f"{output_file_path.stem}-{job_id}-{step_index}{output_file_path.suffix}"))
+
+
+def _run_multi_actor_verifier(
+    job_id: str,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any] | None:
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    verifier_script = PLUGIN_ROOT / "scripts" / "multi_actor_verify.py"
+    if not verifier_script.exists():
+        return None
+    completed = _run_subprocess(
+        [
+            str(python_exe),
+            str(verifier_script),
+            "--facefusion-root",
+            str(root),
+            "--job-id",
+            job_id,
+        ],
+        cwd=root,
+    )
+    payload = {
+        "success": completed["success"],
+        "command": completed["command"],
+        "cwd": completed["cwd"],
+        "stdout_summary": completed["stdout_summary"],
+        "stderr_summary": completed["stderr_summary"],
+    }
+    try:
+        parsed = json.loads(completed["stdout"]) if completed.get("stdout") else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    payload["result"] = parsed
+    return payload
+
+
+def _run_reference_discovery(
+    project_id: str,
+    sample_frames_per_shot: int = 2,
+    cluster_distance_threshold: float = 0.35,
+    source_hint_names: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    script_path = PLUGIN_ROOT / "scripts" / "reference_discovery.py"
+    command = [
+        str(python_exe),
+        str(script_path),
+        "--facefusion-root",
+        str(root),
+        "--project-id",
+        project_id,
+        "--sample-frames-per-shot",
+        str(sample_frames_per_shot),
+        "--cluster-distance-threshold",
+        str(cluster_distance_threshold),
+    ]
+    if source_hint_names:
+        command.extend(["--source-hint-names", *source_hint_names])
+    result = _run_subprocess(command, root)
+    payload = {
+        **result,
+        "project_id": project_id,
+        "sample_frames_per_shot": sample_frames_per_shot,
+        "cluster_distance_threshold": cluster_distance_threshold,
+        "source_hint_names": source_hint_names or [],
+    }
+    payload["result"] = _parse_json_stdout(result, {})
+    return payload
+
+
+def _build_task_step_requests(
     task: dict[str, Any],
     shot: dict[str, Any],
     roles_by_id: dict[str, dict[str, Any]],
+    project_dir: Path,
+    job_id: str,
     overwrite: bool = False,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     source_paths = list(task.get("source_paths") or [])
     if not source_paths:
         source_asset_kind = task.get("source_asset_kind")
@@ -729,15 +1272,56 @@ def _build_task_step_request(
         face_options["trim_frame_end"] = _coerce_frame_bound(shot["frame_end"])
     extra_args = list(task.get("extra_args") or [])
     extra_args.extend(_flat_options_to_args(task.get("processor_options")))
-    return {
-        "source_paths": source_paths,
-        "target_path": shot["target_path"],
-        "output_path": task["output_path"],
+    base_request = {
         "processors": task["processors"],
         "output_options": {"overwrite": overwrite},
         "face_options": face_options,
         "extra_args": extra_args,
     }
+    can_chain_multi_role_swap = (
+        task.get("operation_type") == "face_swap"
+        and task.get("mode") == "reference"
+        and len(task.get("roles") or []) > 1
+        and len(source_paths) == len(task["roles"])
+    )
+    if not can_chain_multi_role_swap:
+        return [
+            {
+                **base_request,
+                "source_paths": source_paths,
+                "target_path": shot["target_path"],
+                "output_path": task["output_path"],
+            }
+        ]
+
+    intermediate_dir = project_dir / "manifests" / "intermediate"
+    _ensure_directory(intermediate_dir)
+    selector_order = face_options.get("face_selector_order") or "left-right"
+    current_target_path = shot["target_path"]
+    step_requests: list[dict[str, Any]] = []
+    output_suffix = Path(task["output_path"]).suffix or ".mp4"
+    for role_index, (role_id, role_source_path) in enumerate(zip(task["roles"], source_paths)):
+        role_face_options = dict(face_options)
+        role_face_options["face_selector_mode"] = "reference"
+        role_face_options["face_selector_order"] = selector_order
+        role_face_options["reference_face_position"] = role_index
+        is_last_step = role_index == len(task["roles"]) - 1
+        if is_last_step:
+            step_output_path = task["output_path"]
+        else:
+            step_output_path = str(intermediate_dir / f"{task['task_id']}-{role_id}-step-{role_index + 1}{output_suffix}")
+        step_requests.append(
+            {
+                **base_request,
+                "role_id": role_id,
+                "source_paths": [role_source_path],
+                "target_path": current_target_path,
+                "output_path": step_output_path,
+                "face_options": role_face_options,
+            }
+        )
+        current_target_path = _job_step_output_path(job_id, role_index, step_output_path)
+    return step_requests
 
 
 def _set_task_status(
@@ -757,6 +1341,847 @@ def _find_task(plan: dict[str, Any], task_id: str) -> dict[str, Any]:
         if task["task_id"] == task_id:
             return task
     raise ValueError(f"Unknown task_id: {task_id}")
+
+
+def _create_auto_job_id(prefix: str, target_path: str) -> str:
+    target_slug = _slugify(Path(target_path).stem or "target")
+    return f"{prefix}-{target_slug}-{int(time.time() * 1000)}"
+
+
+def _queue_single_step_job(
+    *,
+    job_prefix: str,
+    target_path: str,
+    step_request: dict[str, Any],
+    jobs_path: str | None,
+    log_level: str,
+    facefusion_root: str | None,
+    python_path: str | None,
+) -> dict[str, Any]:
+    job_id = _create_auto_job_id(job_prefix, target_path)
+    create_result = facefusion_create_job(
+        job_id=job_id,
+        jobs_path=jobs_path,
+        log_level=log_level,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    if not create_result["success"]:
+        return {
+            "success": False,
+            "queued": False,
+            "job_id": job_id,
+            "create_result": create_result,
+        }
+    add_result = facefusion_update_job_steps(
+        action="add",
+        job_id=job_id,
+        step_request=step_request,
+        jobs_path=jobs_path,
+        log_level=log_level,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    if not add_result["success"]:
+        return {
+            "success": False,
+            "queued": False,
+            "job_id": job_id,
+            "create_result": create_result,
+            "add_result": add_result,
+        }
+    submit_result = facefusion_run_jobs(
+        mode="submit",
+        job_id=job_id,
+        jobs_path=jobs_path,
+        log_level=log_level,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    background_result = None
+    if submit_result["success"] and _default_background_queue_runner():
+        background_result = _ensure_queue_worker(
+            jobs_path=jobs_path,
+            log_level=log_level,
+            skip_nsfw_check=None,
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+    return {
+        "success": submit_result["success"],
+        "queued": submit_result["success"],
+        "job_id": job_id,
+        "create_result": create_result,
+        "add_result": add_result,
+        "submit_result": submit_result,
+        "background_runner_result": background_result,
+        "background_started": bool(background_result and background_result.get("success")),
+    }
+
+
+def _run_task_shortcut(
+    *,
+    source_paths: list[str],
+    target_path: str,
+    output_path: str,
+    preset: str | None,
+    default_processors: list[str],
+    execution: dict[str, Any] | None,
+    output_options: dict[str, Any] | None,
+    memory_options: dict[str, Any] | None,
+    face_options: dict[str, Any] | None,
+    download_options: dict[str, Any] | None,
+    misc_options: dict[str, Any] | None,
+    extra_args: list[str] | None,
+    facefusion_root: str | None,
+    python_path: str | None,
+) -> dict[str, Any]:
+    return facefusion_run_job(
+        source_paths=source_paths,
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        processors=default_processors,
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+
+
+def _launch_facefusion_background_job(
+    *,
+    mode: str,
+    job_id: str | None,
+    jobs_path: str | None,
+    halt_on_error: bool,
+    log_level: str,
+    skip_nsfw_check: bool,
+    facefusion_root: str | None,
+    python_path: str | None,
+) -> dict[str, Any]:
+    mode_map = {
+        "submit": "job-submit",
+        "submit_all": "job-submit-all",
+        "run": "job-run",
+        "run_all": "job-run-all",
+        "retry": "job-retry",
+        "retry_all": "job-retry-all",
+    }
+    if mode not in mode_map:
+        raise ValueError(f"Unknown mode: {mode}")
+    args = [mode_map[mode]]
+    if job_id:
+        args.append(job_id)
+    if jobs_path:
+        args.extend(["--jobs-path", jobs_path])
+    if halt_on_error:
+        args.append("--halt-on-error")
+    args.extend(["--log-level", log_level])
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    command, effective_command_args = _build_facefusion_process_command(root, python_exe, args, skip_nsfw_check)
+    result = _launch_subprocess_background(command, root)
+    result["effective_command_args"] = effective_command_args
+    result["skip_nsfw_check"] = skip_nsfw_check
+    result["mode"] = mode
+    result["job_id"] = job_id
+    return result
+
+
+def _ensure_queue_worker(
+    *,
+    jobs_path: str | None,
+    log_level: str,
+    skip_nsfw_check: bool | None,
+    facefusion_root: str | None,
+    python_path: str | None,
+) -> dict[str, Any]:
+    active_state = _get_active_runner_state()
+    if active_state:
+        return {
+            "success": True,
+            "reused": True,
+            "background": True,
+            "pid": active_state.get("pid"),
+            "state_path": str(RUNNER_STATE_PATH),
+            "runner_state": active_state,
+        }
+    resolved_skip_nsfw_check = _default_skip_nsfw_check() if skip_nsfw_check is None else skip_nsfw_check
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    worker_script = PLUGIN_ROOT / "scripts" / "queue_worker.py"
+    command = [
+        str(python_exe),
+        str(worker_script),
+        "--facefusion-root",
+        str(root),
+        "--python-path",
+        str(python_exe),
+        "--state-path",
+        str(RUNNER_STATE_PATH),
+        "--log-level",
+        log_level,
+    ]
+    if jobs_path:
+        command.extend(["--jobs-path", jobs_path])
+    if resolved_skip_nsfw_check:
+        command.append("--skip-nsfw-check")
+    result = _launch_subprocess_background(command, root)
+    if result.get("success"):
+        _write_runner_state(
+            {
+                "started_at": time.time(),
+                "facefusion_root": str(root),
+                "jobs_path": jobs_path,
+                "status": "starting",
+            }
+        )
+    result["state_path"] = str(RUNNER_STATE_PATH)
+    result["reused"] = False
+    result["skip_nsfw_check"] = resolved_skip_nsfw_check
+    return result
+
+
+def _build_plan_view_model(
+    cast: dict[str, Any],
+    shots: dict[str, Any],
+    plan: dict[str, Any],
+    references: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    roles = cast.get("roles") or []
+    role_names = {role["role_id"]: role.get("role_name") or role["role_id"] for role in roles}
+    shot_list = shots.get("shots") or []
+    tasks = plan.get("tasks") or []
+    shots_by_id = {shot["shot_id"]: shot for shot in shot_list}
+    status_counts: dict[str, int] = {}
+    operation_counts: dict[str, int] = {}
+    preview_count = 0
+    final_count = 0
+    task_cards = []
+    for task in tasks:
+        status = task.get("status") or "unknown"
+        operation_type = task.get("operation_type") or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        operation_counts[operation_type] = operation_counts.get(operation_type, 0) + 1
+        if task.get("task_type") == "preview":
+            preview_count += 1
+        if task.get("task_type") == "final":
+            final_count += 1
+        shot = shots_by_id.get(task["shot_id"], {})
+        task_cards.append(
+            {
+                "task_id": task["task_id"],
+                "task_type": task.get("task_type"),
+                "status": status,
+                "shot_id": task["shot_id"],
+                "operation_id": task.get("operation_id"),
+                "operation_type": operation_type,
+                "roles": task.get("roles") or [],
+                "role_names": [role_names.get(role_id, role_id) for role_id in task.get("roles") or []],
+                "processors": task.get("processors") or [],
+                "mode": task.get("mode"),
+                "risk_level": task.get("risk_level"),
+                "quality_profile": task.get("quality_profile"),
+                "execution_provider": task.get("execution_provider"),
+                "output_path": task.get("output_path"),
+                "status_note": task.get("status_note", ""),
+                "trim_start": shot.get("trim_start"),
+                "trim_end": shot.get("trim_end"),
+                "frame_start": shot.get("frame_start"),
+                "frame_end": shot.get("frame_end"),
+                "preview_required": any(
+                    operation.get("operation_id") == task.get("operation_id") and operation.get("preview_required")
+                    for operation in shot.get("operations") or []
+                ),
+                "shot_notes": shot.get("notes", ""),
+            }
+        )
+    return {
+        "project_id": plan.get("project_id") or cast.get("project_id") or shots.get("project_id"),
+        "summary": {
+            "role_count": len(roles),
+            "shot_count": len(shot_list),
+            "task_count": len(tasks),
+            "preview_count": preview_count,
+            "final_count": final_count,
+            "status_counts": status_counts,
+            "operation_counts": operation_counts,
+            "reference_cluster_count": len((references or {}).get("clusters") or []),
+        },
+        "roles": roles,
+        "shots": shot_list,
+        "tasks": task_cards,
+        "references": references or {},
+    }
+
+
+def _render_plan_html(plan_view: dict[str, Any]) -> str:
+    payload = json.dumps(plan_view, ensure_ascii=False)
+    title = html.escape(f"FaceFusion Plan - {plan_view['project_id']}")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f6f3ea;
+      --panel: rgba(255, 255, 255, 0.82);
+      --panel-strong: #fffdf8;
+      --ink: #1f1d1a;
+      --muted: #6e655d;
+      --accent: #b14d24;
+      --accent-soft: rgba(177, 77, 36, 0.12);
+      --line: rgba(61, 49, 41, 0.12);
+      --ok: #2f7d4b;
+      --warn: #a36911;
+      --bad: #9f2d2d;
+      --shadow: 0 18px 40px rgba(69, 45, 24, 0.08);
+      --radius: 18px;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(203, 124, 72, 0.2), transparent 28rem),
+        radial-gradient(circle at top right, rgba(77, 111, 142, 0.18), transparent 24rem),
+        linear-gradient(180deg, #fbf8f0 0%, #f2ede3 100%);
+    }}
+    .shell {{
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }}
+    .hero {{
+      display: grid;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,247,239,0.9));
+      box-shadow: var(--shadow);
+    }}
+    .eyebrow {{
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }}
+    h1 {{
+      margin: 0;
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1;
+    }}
+    .sub {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      max-width: 760px;
+    }}
+    .stats {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }}
+    .stat, .panel {{
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+    }}
+    .stat {{
+      padding: 16px 18px;
+    }}
+    .stat .label {{
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .stat .value {{
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: 700;
+    }}
+    .layout {{
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 20px;
+    }}
+    .stack {{
+      display: grid;
+      gap: 20px;
+      align-content: start;
+    }}
+    .panel {{
+      padding: 18px;
+    }}
+    .panel h2 {{
+      margin: 0 0 14px;
+      font-size: 18px;
+    }}
+    .list {{
+      display: grid;
+      gap: 10px;
+    }}
+    .chip {{
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+    }}
+    .role, .shot {{
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel-strong);
+    }}
+    .role strong, .shot strong {{
+      display: block;
+      margin-bottom: 4px;
+    }}
+    .muted {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .toolbar {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }}
+    .toolbar input, .toolbar select {{
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.88);
+      color: var(--ink);
+      min-width: 180px;
+    }}
+    .tasks {{
+      display: grid;
+      gap: 14px;
+    }}
+    .task {{
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,242,234,0.94));
+      box-shadow: var(--shadow);
+    }}
+    .task-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: start;
+    }}
+    .task h3 {{
+      margin: 0 0 8px;
+      font-size: 20px;
+    }}
+    .meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0 0;
+    }}
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(61, 49, 41, 0.08);
+    }}
+    .status-planned, .status-materialized, .status-approved {{ color: var(--ok); }}
+    .status-blocked_on_preview, .status-blocked_on_revision, .status-rejected {{ color: var(--warn); }}
+    .status-failed, .status-materialize_failed {{ color: var(--bad); }}
+    .grid {{
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }}
+    .fact {{
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.76);
+      border: 1px solid var(--line);
+    }}
+    .fact .k {{
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .fact .v {{
+      margin-top: 6px;
+      font-size: 14px;
+      word-break: break-word;
+    }}
+    .empty {{
+      padding: 24px;
+      border: 1px dashed var(--line);
+      border-radius: 18px;
+      color: var(--muted);
+      text-align: center;
+      background: rgba(255,255,255,0.5);
+    }}
+    @media (max-width: 960px) {{
+      .layout {{
+        grid-template-columns: 1fr;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="eyebrow">FaceFusion Multi-Actor Plan</div>
+      <h1>{title}</h1>
+      <p class="sub">A lightweight visual layer over <code>cast.json</code>, <code>shots.json</code>, and <code>plan.json</code> so an agent or operator can review the queue before preview approval or final renders.</p>
+      <div class="stats" id="stats"></div>
+    </section>
+    <section class="layout">
+      <aside class="stack">
+        <div class="panel">
+          <h2>Cast</h2>
+          <div class="list" id="roles"></div>
+        </div>
+        <div class="panel">
+          <h2>Shots</h2>
+          <div class="list" id="shots"></div>
+        </div>
+        <div class="panel">
+          <h2>References</h2>
+          <div class="list" id="references"></div>
+        </div>
+      </aside>
+      <main class="panel">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Filter by role, shot, task, or processor">
+          <select id="statusFilter">
+            <option value="">All statuses</option>
+          </select>
+          <select id="typeFilter">
+            <option value="">All task types</option>
+            <option value="preview">Preview</option>
+            <option value="final">Final</option>
+          </select>
+        </div>
+        <div class="tasks" id="tasks"></div>
+      </main>
+    </section>
+  </div>
+  <script>
+    const planView = {payload};
+
+    const statusClass = (status) => "status-" + String(status || "unknown").replace(/[^a-z0-9_]+/gi, "_");
+    const el = (tag, className, text) => {{
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }};
+    const fmt = (value) => {{
+      if (value === null || value === undefined || value === "") return "n/a";
+      if (Array.isArray(value)) return value.length ? value.join(", ") : "n/a";
+      return String(value);
+    }};
+
+    function renderStats(summary) {{
+      const stats = document.getElementById("stats");
+      stats.innerHTML = "";
+      [
+        ["Roles", summary.role_count],
+        ["Shots", summary.shot_count],
+        ["Tasks", summary.task_count],
+        ["Previews", summary.preview_count],
+        ["Finals", summary.final_count],
+        ["Ref Clusters", summary.reference_cluster_count || 0]
+      ].forEach(([label, value]) => {{
+        const card = el("div", "stat");
+        card.appendChild(el("div", "label", label));
+        card.appendChild(el("div", "value", String(value)));
+        stats.appendChild(card);
+      }});
+    }}
+
+    function renderRoles(roles) {{
+      const root = document.getElementById("roles");
+      root.innerHTML = "";
+      roles.forEach((role) => {{
+        const card = el("div", "role");
+        card.appendChild(el("strong", "", role.role_name || role.role_id));
+        card.appendChild(el("div", "muted", role.role_id));
+        const chips = el("div", "meta");
+        Object.keys(role.source_assets || {{}}).forEach((kind) => {{
+          chips.appendChild(el("span", "chip", kind));
+        }});
+        card.appendChild(chips);
+        if (role.notes) {{
+          card.appendChild(el("p", "muted", role.notes));
+        }}
+        root.appendChild(card);
+      }});
+    }}
+
+    function renderShots(shots) {{
+      const root = document.getElementById("shots");
+      root.innerHTML = "";
+      shots.forEach((shot) => {{
+        const card = el("div", "shot");
+        card.appendChild(el("strong", "", shot.shot_id));
+        const detail = [shot.target_path, shot.trim_start ?? shot.frame_start, shot.trim_end ?? shot.frame_end].filter((v) => v !== undefined && v !== null);
+        card.appendChild(el("div", "muted", detail.join(" | ")));
+        const chips = el("div", "meta");
+        (shot.roles || []).forEach((roleId) => chips.appendChild(el("span", "chip", roleId)));
+        (shot.operations || []).forEach((op) => chips.appendChild(el("span", "badge", op.operation_type)));
+        card.appendChild(chips);
+        root.appendChild(card);
+      }});
+    }}
+
+    function renderReferences(referenceState) {{
+      const root = document.getElementById("references");
+      root.innerHTML = "";
+      const clusters = referenceState?.clusters || [];
+      const groups = referenceState?.decision_groups || referenceState?.suggested_groups || [];
+      if (!clusters.length) {{
+        root.appendChild(el("div", "empty", "No reference discovery data yet."));
+        return;
+      }}
+      clusters.forEach((cluster) => {{
+        const card = el("div", "role");
+        card.appendChild(el("strong", "", cluster.suggested_role_name || cluster.label || cluster.cluster_id));
+        card.appendChild(el("div", "muted", `${{cluster.cluster_id}} | samples: ${{cluster.sample_count || 0}} | shots: ${{(cluster.shot_ids || []).join(", ") || "n/a"}}`));
+        if (cluster.prefill_source_candidate) {{
+          const prefill = cluster.prefill_source_candidate;
+          card.appendChild(el("div", "muted", `Prefill: ${{prefill.label}}${{prefill.source_path ? " -> " + prefill.source_path : ""}}`));
+        }}
+        root.appendChild(card);
+      }});
+      if (groups.length) {{
+        const foot = el("div", "muted", `Merge groups prepared: ${{groups.length}}`);
+        root.appendChild(foot);
+      }}
+    }}
+
+    function populateStatusFilter(tasks) {{
+      const select = document.getElementById("statusFilter");
+      const statuses = Array.from(new Set(tasks.map((task) => task.status))).sort();
+      statuses.forEach((status) => {{
+        const option = document.createElement("option");
+        option.value = status;
+        option.textContent = status;
+        select.appendChild(option);
+      }});
+    }}
+
+    function renderTasks() {{
+      const search = document.getElementById("search").value.trim().toLowerCase();
+      const statusFilter = document.getElementById("statusFilter").value;
+      const typeFilter = document.getElementById("typeFilter").value;
+      const root = document.getElementById("tasks");
+      root.innerHTML = "";
+      const filtered = planView.tasks.filter((task) => {{
+        const haystack = [
+          task.task_id,
+          task.shot_id,
+          task.operation_type,
+          ...(task.role_names || []),
+          ...(task.roles || []),
+          ...(task.processors || [])
+        ].join(" ").toLowerCase();
+        if (search && !haystack.includes(search)) return false;
+        if (statusFilter && task.status !== statusFilter) return false;
+        if (typeFilter && task.task_type !== typeFilter) return false;
+        return true;
+      }});
+      if (!filtered.length) {{
+        root.appendChild(el("div", "empty", "No tasks match the current filter."));
+        return;
+      }}
+      filtered.forEach((task) => {{
+        const card = el("article", "task");
+        const top = el("div", "task-top");
+        const left = el("div");
+        left.appendChild(el("h3", "", task.task_id));
+        left.appendChild(el("div", "muted", `${{task.operation_type}} on ${{task.shot_id}}`));
+        const meta = el("div", "meta");
+        meta.appendChild(el("span", "badge " + statusClass(task.status), task.status));
+        meta.appendChild(el("span", "badge", task.task_type));
+        meta.appendChild(el("span", "badge", task.mode || "standard"));
+        meta.appendChild(el("span", "badge", task.execution_provider || "provider:n/a"));
+        meta.appendChild(el("span", "badge", task.risk_level || "risk:n/a"));
+        left.appendChild(meta);
+        top.appendChild(left);
+        const roleBox = el("div", "muted", fmt(task.role_names));
+        top.appendChild(roleBox);
+        card.appendChild(top);
+        const grid = el("div", "grid");
+        [
+          ["Processors", fmt(task.processors)],
+          ["Output", fmt(task.output_path)],
+          ["Quality", fmt(task.quality_profile)],
+          ["Preview Required", task.preview_required ? "yes" : "no"],
+          ["Trim Range", fmt([task.trim_start, task.trim_end].filter((v) => v !== null && v !== undefined))],
+          ["Frame Range", fmt([task.frame_start, task.frame_end].filter((v) => v !== null && v !== undefined))]
+        ].forEach(([key, value]) => {{
+          const fact = el("div", "fact");
+          fact.appendChild(el("div", "k", key));
+          fact.appendChild(el("div", "v", value));
+          grid.appendChild(fact);
+        }});
+        card.appendChild(grid);
+        if (task.status_note || task.shot_notes) {{
+          const note = el("p", "muted", [task.status_note, task.shot_notes].filter(Boolean).join(" | "));
+          card.appendChild(note);
+        }}
+        root.appendChild(card);
+      }});
+    }}
+
+    renderStats(planView.summary);
+    renderRoles(planView.roles);
+    renderShots(planView.shots);
+    renderReferences(planView.references || {{}});
+    populateStatusFilter(planView.tasks);
+    renderTasks();
+
+    document.getElementById("search").addEventListener("input", renderTasks);
+    document.getElementById("statusFilter").addEventListener("change", renderTasks);
+    document.getElementById("typeFilter").addEventListener("change", renderTasks);
+  </script>
+</body>
+</html>
+"""
+
+
+def _render_reference_html(reference_view: dict[str, Any]) -> str:
+    payload = json.dumps(reference_view, ensure_ascii=False)
+    title = html.escape(f"FaceFusion References - {reference_view['project_id']}")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      --bg: #f6f3ea;
+      --panel: rgba(255,255,255,0.92);
+      --line: rgba(61,49,41,0.12);
+      --ink: #1f1d1a;
+      --muted: #6e655d;
+      --accent: #b14d24;
+      --shadow: 0 18px 40px rgba(69,45,24,0.08);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: "Segoe UI", sans-serif; color: var(--ink); background: linear-gradient(180deg, #fbf8f0 0%, #f2ede3 100%); }}
+    .shell {{ max-width: 1360px; margin: 0 auto; padding: 28px 20px 40px; }}
+    .hero, .card {{ border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); }}
+    .hero {{ padding: 24px; margin-bottom: 20px; }}
+    .eyebrow {{ color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }}
+    h1 {{ margin: 8px 0 0; font-size: 38px; }}
+    .sub, .muted {{ color: var(--muted); }}
+    .stats, .grid, .samples {{ display: grid; gap: 12px; }}
+    .stats {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 16px; }}
+    .grid {{ grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }}
+    .samples {{ grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 12px; }}
+    .stat, .card {{ padding: 18px; }}
+    .stat {{ border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,0.88); }}
+    .label {{ color: var(--muted); font-size: 12px; text-transform: uppercase; }}
+    .value {{ margin-top: 8px; font-size: 26px; font-weight: 700; }}
+    .samples img {{ width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: #eee7dc; }}
+    .chip {{ display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(177,77,36,0.12); color: var(--accent); font-size: 12px; font-weight: 700; margin: 6px 6px 0 0; }}
+    code {{ display: block; white-space: pre-wrap; word-break: break-word; font-size: 12px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,0.7); border: 1px solid var(--line); }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="eyebrow">FaceFusion Role Reference Review</div>
+      <h1>{title}</h1>
+      <p class="sub">Review discovered face clusters before plan materialization. Suggested groups and source prefills are shown as a starting point for merge decisions.</p>
+      <div class="stats">
+        <div class="stat"><div class="label">Shots</div><div class="value" id="shotCount"></div></div>
+        <div class="stat"><div class="label">Clusters</div><div class="value" id="clusterCount"></div></div>
+        <div class="stat"><div class="label">Groups</div><div class="value" id="groupCount"></div></div>
+        <div class="stat"><div class="label">Sources</div><div class="value" id="sourceCount"></div></div>
+      </div>
+    </section>
+    <section class="grid" id="clusters"></section>
+  </div>
+  <script>
+    const view = {payload};
+    document.getElementById("shotCount").textContent = String((view.per_shot_summary || []).length);
+    document.getElementById("clusterCount").textContent = String((view.clusters || []).length);
+    document.getElementById("groupCount").textContent = String((view.decision_groups || view.suggested_groups || []).length);
+    document.getElementById("sourceCount").textContent = String((view.source_candidates || []).length);
+    const root = document.getElementById("clusters");
+    (view.clusters || []).forEach((cluster) => {{
+      const card = document.createElement("article");
+      card.className = "card";
+      const title = document.createElement("h2");
+      title.textContent = cluster.suggested_role_name || cluster.label || cluster.cluster_id;
+      card.appendChild(title);
+      const meta = document.createElement("p");
+      meta.className = "muted";
+      meta.textContent = `${{cluster.cluster_id}} | shots: ${{(cluster.shot_ids || []).join(", ") || "n/a"}} | samples: ${{cluster.sample_count || 0}}`;
+      card.appendChild(meta);
+      if (cluster.prefill_source_candidate) {{
+        const hint = document.createElement("p");
+        hint.className = "muted";
+        hint.textContent = `Prefill source: ${{cluster.prefill_source_candidate.label}}${{cluster.prefill_source_candidate.source_path ? " -> " + cluster.prefill_source_candidate.source_path : ""}}`;
+        card.appendChild(hint);
+      }}
+      const chipRow = document.createElement("div");
+      (cluster.shot_ids || []).forEach((shotId) => {{
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = shotId;
+        chipRow.appendChild(chip);
+      }});
+      card.appendChild(chipRow);
+      const sampleGrid = document.createElement("div");
+      sampleGrid.className = "samples";
+      (cluster.sample_paths || []).slice(0, 6).forEach((samplePath) => {{
+        const img = document.createElement("img");
+        img.src = samplePath.startsWith("file:") ? samplePath : "file:///" + samplePath.replace(/\\\\/g, "/");
+        img.alt = cluster.cluster_id;
+        sampleGrid.appendChild(img);
+      }});
+      card.appendChild(sampleGrid);
+      const code = document.createElement("code");
+      code.textContent = JSON.stringify((view.decision_groups || view.suggested_groups || []).find((group) => (group.cluster_ids || []).includes(cluster.cluster_id)) || {{}}, null, 2);
+      card.appendChild(code);
+      root.appendChild(card);
+    }});
+  </script>
+</body>
+</html>
+"""
 
 
 @mcp.tool(description="Check whether the local FaceFusion installation can run on this machine.", structured_output=True)
@@ -838,17 +2263,83 @@ def facefusion_list_capabilities(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
+    choice_catalog = _available_choice_catalog(facefusion_root=facefusion_root, python_path=python_path)
     capabilities = {
         "commands": DEFAULT_COMMANDS,
         "processors": _available_processors(facefusion_root=facefusion_root),
         "providers": _available_providers(facefusion_root=facefusion_root, python_path=python_path),
         "encoders": _available_encoders(facefusion_root=facefusion_root, python_path=python_path),
+        "ui_layouts": choice_catalog.get("ui_layouts", []),
+        "ui_workflows": choice_catalog.get("ui_workflows", []),
+        "download": {
+            "providers": choice_catalog.get("download_providers", []),
+            "scopes": choice_catalog.get("download_scopes", []),
+        },
+        "memory": {
+            "video_memory_strategies": choice_catalog.get("video_memory_strategies", []),
+            "execution_thread_count_range": choice_catalog.get("execution_thread_count_range", []),
+            "system_memory_limit_range": choice_catalog.get("system_memory_limit_range", []),
+        },
+        "benchmark": {
+            "modes": choice_catalog.get("benchmark_modes", []),
+            "resolutions": choice_catalog.get("benchmark_resolutions", []),
+            "cycle_count_range": choice_catalog.get("benchmark_cycle_count_range", []),
+        },
+        "face": choice_catalog.get("face", {}),
+        "output": choice_catalog.get("output", {}),
+        "processor_models": choice_catalog.get("processor_models", {}),
+        "presets": PRESET_LIBRARY,
     }
     if category == "all":
         return capabilities
     if category not in capabilities:
         raise ValueError(f"Unknown category: {category}")
     return {category: capabilities[category]}
+
+
+@mcp.tool(description="List the built-in FaceFusion MCP presets and their merged defaults.", structured_output=True)
+def facefusion_list_presets() -> dict[str, Any]:
+    return {
+        "preset_count": len(PRESET_LIBRARY),
+        "presets": PRESET_LIBRARY,
+    }
+
+
+@mcp.tool(description="Check the FaceFusion queue worker and summarize queued, failed, completed, and drafted jobs.", structured_output=True)
+def facefusion_check_queue(
+    jobs_path: str | None = None,
+    log_level: str = "info",
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    runner_state = _read_runner_state()
+    active_runner_state = _get_active_runner_state()
+    statuses = ["drafted", "queued", "failed", "completed"]
+    results: dict[str, Any] = {}
+    counts: dict[str, int] = {}
+    overall_success = True
+    for status in statuses:
+        result = _list_jobs_by_status(
+            status,
+            jobs_path=jobs_path,
+            log_level=log_level,
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+        results[status] = result
+        counts[status] = _count_job_rows((result.get("stdout") or "") + (result.get("stderr") or ""))
+        overall_success = overall_success and result.get("success", False)
+    return {
+        "success": overall_success,
+        "runner": {
+            "state_path": str(RUNNER_STATE_PATH),
+            "active": bool(active_runner_state),
+            "state": active_runner_state or runner_state,
+        },
+        "counts": counts,
+        "jobs_path": jobs_path or ".jobs",
+        "results": results,
+    }
 
 
 @mcp.tool(description="Download or repair local FaceFusion model assets.", structured_output=True)
@@ -1027,6 +2518,9 @@ def facefusion_run_job(
     source_paths: list[str],
     target_path: str,
     output_path: str,
+    preset: str | None = None,
+    enqueue: bool | None = None,
+    jobs_path: str | None = None,
     processors: list[str] | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
@@ -1038,49 +2532,203 @@ def facefusion_run_job(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(misc_options)
+    resolved = _resolve_preset_bundle(
+        preset,
+        processors=processors,
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+    )
+    queue_mode = _default_enqueue_tasks() if enqueue is None else enqueue
+    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(resolved["misc_options"])
     for source_path in source_paths:
         _require_existing_file(source_path, "source_paths item")
     _require_existing_file(target_path, "target_path")
-    _ensure_output_allowed(output_path, output_options)
+    _ensure_output_allowed(output_path, resolved["output_options"])
 
     args = ["headless-run", "-s", *source_paths, "-t", target_path, "-o", output_path]
     args.extend(
         _build_common_run_args(
-            processors=processors,
-            execution=execution,
-            output_options=output_options,
-            memory_options=memory_options,
-            face_options=face_options,
-            download_options=download_options,
+            processors=resolved["processors"],
+            execution=resolved["execution"],
+            output_options=resolved["output_options"],
+            memory_options=resolved["memory_options"],
+            face_options=resolved["face_options"],
+            download_options=resolved["download_options"],
             misc_options=normalized_misc_options,
-            extra_args=extra_args,
+            extra_args=resolved["extra_args"],
             facefusion_root=facefusion_root,
             python_path=python_path,
             include_default_execution=True,
         )
     )
-    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
     normalized = {
         "source_paths": source_paths,
         "target_path": target_path,
         "output_path": output_path,
-        "processors": processors or [],
-        "execution": execution or {"providers": _default_provider(facefusion_root=facefusion_root, python_path=python_path)},
-        "output_options": output_options or {},
-        "memory_options": memory_options or {},
-        "face_options": face_options or {},
-        "download_options": download_options or {},
+        "preset": preset,
+        "enqueue": queue_mode,
+        "jobs_path": jobs_path,
+        "processors": resolved["processors"],
+        "execution": resolved["execution"] or {"providers": _default_provider(facefusion_root=facefusion_root, python_path=python_path)},
+        "output_options": resolved["output_options"],
+        "memory_options": resolved["memory_options"],
+        "face_options": resolved["face_options"],
+        "download_options": resolved["download_options"],
         "misc_options": normalized_misc_options or {"log_level": "info"},
-        "extra_args": extra_args or [],
+        "extra_args": resolved["extra_args"],
         "skip_nsfw_check": skip_nsfw_check,
     }
+    if queue_mode:
+        step_request = {
+            "source_paths": source_paths,
+            "target_path": target_path,
+            "output_path": output_path,
+            "processors": resolved["processors"],
+            "output_options": resolved["output_options"],
+            "face_options": resolved["face_options"],
+            "extra_args": list(resolved["extra_args"]),
+        }
+        queue_result = _queue_single_step_job(
+            job_prefix="run",
+            target_path=target_path,
+            step_request=step_request,
+            jobs_path=jobs_path,
+            log_level=normalized_misc_options.get("log_level", "info"),
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+        return {
+            **queue_result,
+            "mode": "queued",
+            "queue_runtime_note": "Execution, memory, and download runtime options are applied when queued jobs are run, not when the step is drafted.",
+            "normalized_request": normalized,
+            "output_path": output_path,
+            "output_exists": Path(output_path).exists(),
+            "skip_nsfw_check": skip_nsfw_check,
+        }
+    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
     return {
         **result,
+        "mode": "executed",
         "normalized_request": normalized,
         "output_path": output_path,
         "output_exists": Path(output_path).exists(),
         "skip_nsfw_check": skip_nsfw_check,
+    }
+
+
+@mcp.tool(description="Launch the local FaceFusion interactive UI, or preview the launch command in dry-run mode.", structured_output=True)
+def facefusion_launch_ui(
+    source_paths: list[str] | None = None,
+    target_path: str | None = None,
+    output_path: str | None = None,
+    preset: str | None = None,
+    processors: list[str] | None = None,
+    execution: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    open_browser: bool = True,
+    ui_layouts: list[str] | None = None,
+    ui_workflow: str | None = None,
+    extra_args: list[str] | None = None,
+    dry_run: bool = False,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    resolved = _resolve_preset_bundle(
+        preset,
+        processors=processors,
+        execution=execution,
+        output_options=None,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+    )
+    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(resolved["misc_options"])
+    normalized_sources = list(source_paths or [])
+    for source_path in normalized_sources:
+        _require_existing_file(source_path, "source_paths item")
+    if target_path:
+        _require_existing_file(target_path, "target_path")
+
+    args = ["run"]
+    if normalized_sources:
+        args.extend(["-s", *normalized_sources])
+    if target_path:
+        args.extend(["-t", target_path])
+    if output_path:
+        args.extend(["-o", output_path])
+    if open_browser:
+        args.append("--open-browser")
+    if ui_layouts:
+        args.extend(["--ui-layouts", *ui_layouts])
+    if ui_workflow:
+        args.extend(["--ui-workflow", ui_workflow])
+    args.extend(
+        _build_common_run_args(
+            processors=resolved["processors"],
+            execution=resolved["execution"],
+            output_options=None,
+            memory_options=resolved["memory_options"],
+            face_options=resolved["face_options"],
+            download_options=resolved["download_options"],
+            misc_options=normalized_misc_options,
+            extra_args=resolved["extra_args"],
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+            include_default_execution=True,
+        )
+    )
+    root = _facefusion_root(facefusion_root)
+    python_exe = _facefusion_python(facefusion_root, python_path)
+    command, effective_command_args = _build_facefusion_process_command(root, python_exe, args, skip_nsfw_check)
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "launched": False,
+            "command": command,
+            "effective_command_args": effective_command_args,
+            "cwd": str(root),
+            "skip_nsfw_check": skip_nsfw_check,
+            "normalized_request": {
+                "source_paths": normalized_sources,
+                "target_path": target_path,
+                "output_path": output_path,
+                "preset": preset,
+                "processors": resolved["processors"],
+                "execution": resolved["execution"] or {"providers": _default_provider(facefusion_root=facefusion_root, python_path=python_path)},
+                "memory_options": resolved["memory_options"],
+                "face_options": resolved["face_options"],
+                "download_options": resolved["download_options"],
+                "misc_options": normalized_misc_options or {"log_level": "info"},
+                "open_browser": open_browser,
+                "ui_layouts": ui_layouts or [],
+                "ui_workflow": ui_workflow,
+                "extra_args": resolved["extra_args"],
+                "skip_nsfw_check": skip_nsfw_check,
+            },
+        }
+    result = _launch_subprocess(command, root)
+    return {
+        **result,
+        "dry_run": False,
+        "launched": result["success"],
+        "effective_command_args": effective_command_args,
+        "preset": preset,
+        "skip_nsfw_check": skip_nsfw_check,
+        "open_browser": open_browser,
+        "ui_layouts": ui_layouts or [],
+        "ui_workflow": ui_workflow,
     }
 
 
@@ -1089,6 +2737,7 @@ def facefusion_batch_run(
     source_pattern: str,
     target_pattern: str,
     output_pattern: str,
+    preset: str | None = None,
     processors: list[str] | None = None,
     execution: dict[str, Any] | None = None,
     output_options: dict[str, Any] | None = None,
@@ -1100,18 +2749,29 @@ def facefusion_batch_run(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
-    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(misc_options)
+    resolved = _resolve_preset_bundle(
+        preset,
+        processors=processors,
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+    )
+    normalized_misc_options, skip_nsfw_check = _extract_skip_nsfw_check(resolved["misc_options"])
     args = ["batch-run", "-s", source_pattern, "-t", target_pattern, "-o", output_pattern]
     args.extend(
         _build_common_run_args(
-            processors=processors,
-            execution=execution,
-            output_options=output_options,
-            memory_options=memory_options,
-            face_options=face_options,
-            download_options=download_options,
+            processors=resolved["processors"],
+            execution=resolved["execution"],
+            output_options=resolved["output_options"],
+            memory_options=resolved["memory_options"],
+            face_options=resolved["face_options"],
+            download_options=resolved["download_options"],
             misc_options=normalized_misc_options,
-            extra_args=extra_args,
+            extra_args=resolved["extra_args"],
             facefusion_root=facefusion_root,
             python_path=python_path,
             include_default_execution=True,
@@ -1125,12 +2785,366 @@ def facefusion_batch_run(
             "target_pattern": target_pattern,
             "output_pattern": output_pattern,
         },
+        "preset": preset,
         "skip_nsfw_check": skip_nsfw_check,
     }
 
 
+@mcp.tool(description="Task shortcut: run a direct face swap on local media with sensible defaults.", structured_output=True)
+def facefusion_task_face_swap(
+    source_paths: list[str],
+    target_path: str,
+    output_path: str,
+    preset: str = "balanced_face_swap",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=source_paths,
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["face_swapper", "face_enhancer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "face_swap"
+    return result
+
+
+@mcp.tool(description="Task shortcut: run a lip sync task on local media with speaking-face defaults.", structured_output=True)
+def facefusion_task_lip_sync(
+    source_audio_paths: list[str],
+    target_path: str,
+    output_path: str,
+    preset: str = "lip_sync_clean",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=source_audio_paths,
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["lip_syncer", "face_enhancer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "lip_sync"
+    return result
+
+
+@mcp.tool(description="Task shortcut: remove the background from an image or video subject.", structured_output=True)
+def facefusion_task_remove_background(
+    target_path: str,
+    output_path: str,
+    preset: str = "background_cutout",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["background_remover"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "background_remove"
+    return result
+
+
+@mcp.tool(description="Task shortcut: enhance faces in an image or video without changing identity.", structured_output=True)
+def facefusion_task_enhance_face(
+    target_path: str,
+    output_path: str,
+    preset: str = "portrait_enhance",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["face_enhancer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "face_enhance"
+    return result
+
+
+@mcp.tool(description="Task shortcut: enhance or upscale full frames for restoration work.", structured_output=True)
+def facefusion_task_enhance_frame(
+    target_path: str,
+    output_path: str,
+    preset: str = "frame_restore",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["frame_enhancer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "frame_enhance"
+    return result
+
+
+@mcp.tool(description="Task shortcut: colorize grayscale or archival video frames.", structured_output=True)
+def facefusion_task_colorize_frames(
+    target_path: str,
+    output_path: str,
+    preset: str = "archive_colorize",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["frame_colorizer", "frame_enhancer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "frame_colorize"
+    return result
+
+
+@mcp.tool(description="Task shortcut: adjust face pose, gaze, mouth, or expression parameters.", structured_output=True)
+def facefusion_task_edit_face(
+    target_path: str,
+    output_path: str,
+    preset: str | None = None,
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["face_editor"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "face_edit"
+    return result
+
+
+@mcp.tool(description="Task shortcut: restore or transfer facial expression characteristics.", structured_output=True)
+def facefusion_task_restore_expression(
+    target_path: str,
+    output_path: str,
+    preset: str | None = None,
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["expression_restorer"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "expression_restore"
+    return result
+
+
+@mcp.tool(description="Task shortcut: age or de-age a face in an image or video.", structured_output=True)
+def facefusion_task_modify_age(
+    target_path: str,
+    output_path: str,
+    preset: str | None = None,
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["age_modifier"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "age_modify"
+    return result
+
+
+@mcp.tool(description="Task shortcut: render detector, landmark, and mask overlays for debugging.", structured_output=True)
+def facefusion_task_debug_faces(
+    target_path: str,
+    output_path: str,
+    preset: str = "face_debug_overlay",
+    execution: dict[str, Any] | None = None,
+    output_options: dict[str, Any] | None = None,
+    memory_options: dict[str, Any] | None = None,
+    face_options: dict[str, Any] | None = None,
+    download_options: dict[str, Any] | None = None,
+    misc_options: dict[str, Any] | None = None,
+    extra_args: list[str] | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    result = _run_task_shortcut(
+        source_paths=[],
+        target_path=target_path,
+        output_path=output_path,
+        preset=preset,
+        default_processors=["face_debugger"],
+        execution=execution,
+        output_options=output_options,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=download_options,
+        misc_options=misc_options,
+        extra_args=extra_args,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    result["task_kind"] = "face_debug"
+    return result
+
+
 @mcp.tool(description="Benchmark local FaceFusion providers and processor settings.", structured_output=True)
 def facefusion_benchmark(
+    preset: str | None = None,
     processors: list[str] | None = None,
     execution: dict[str, Any] | None = None,
     memory_options: dict[str, Any] | None = None,
@@ -1141,6 +3155,17 @@ def facefusion_benchmark(
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
+    resolved = _resolve_preset_bundle(
+        preset,
+        processors=processors,
+        execution=execution,
+        output_options=None,
+        memory_options=memory_options,
+        face_options=face_options,
+        download_options=None,
+        misc_options=misc_options,
+        extra_args=extra_args,
+    )
     args = ["benchmark"]
     benchmark_rename = {
         "mode": "benchmark_mode",
@@ -1150,13 +3175,13 @@ def facefusion_benchmark(
     }
     args.extend(
         _build_common_run_args(
-            processors=processors,
-            execution=execution,
+            processors=resolved["processors"],
+            execution=resolved["execution"],
             output_options=None,
-            memory_options=memory_options,
-            face_options=face_options,
+            memory_options=resolved["memory_options"],
+            face_options=resolved["face_options"],
             download_options=None,
-            misc_options=misc_options,
+            misc_options=resolved["misc_options"],
             extra_args=None,
             facefusion_root=facefusion_root,
             python_path=python_path,
@@ -1164,11 +3189,12 @@ def facefusion_benchmark(
         )
     )
     _append_flat_options(args, benchmark_options, benchmark_rename)
-    if extra_args:
-        args.extend(str(item) for item in extra_args)
+    if resolved["extra_args"]:
+        args.extend(str(item) for item in resolved["extra_args"])
     result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path)
     return {
         **result,
+        "preset": preset,
         "benchmark_options": benchmark_options or {},
     }
 
@@ -1273,7 +3299,8 @@ def facefusion_run_jobs(
     jobs_path: str | None = None,
     halt_on_error: bool = False,
     log_level: str = "info",
-    skip_nsfw_check: bool = False,
+    skip_nsfw_check: bool | None = None,
+    background: bool = False,
     facefusion_root: str | None = None,
     python_path: str | None = None,
 ) -> dict[str, Any]:
@@ -1298,13 +3325,31 @@ def facefusion_run_jobs(
     if halt_on_error:
         args.append("--halt-on-error")
     args.extend(["--log-level", log_level])
-    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=skip_nsfw_check)
-    return {
+    resolved_skip_nsfw_check = _default_skip_nsfw_check() if skip_nsfw_check is None else skip_nsfw_check
+    if background:
+        background_result = _launch_facefusion_background_job(
+            mode=mode,
+            job_id=job_id,
+            jobs_path=jobs_path,
+            halt_on_error=halt_on_error,
+            log_level=log_level,
+            skip_nsfw_check=resolved_skip_nsfw_check,
+            facefusion_root=facefusion_root,
+            python_path=python_path,
+        )
+        return background_result
+    result = _run_facefusion_command(args, facefusion_root=facefusion_root, python_path=python_path, skip_nsfw_check=resolved_skip_nsfw_check)
+    payload = {
         **result,
         "mode": mode,
         "job_id": job_id,
-        "skip_nsfw_check": skip_nsfw_check,
+        "skip_nsfw_check": resolved_skip_nsfw_check,
     }
+    if result["success"] and mode in {"run", "retry"} and job_id:
+        verification = _run_multi_actor_verifier(job_id, facefusion_root=facefusion_root, python_path=python_path)
+        if verification:
+            payload["multi_actor_verification"] = verification
+    return payload
 
 
 @mcp.tool(description="List or delete FaceFusion jobs.", structured_output=True)
@@ -1386,6 +3431,171 @@ def facefusion_define_cast(
         "cast_path": str(cast_path),
         "role_count": len(normalized_roles),
         "cast": payload,
+    }
+
+
+@mcp.tool(description="Discover reference face clusters across planned shots before building the final multi-actor plan.", structured_output=True)
+def facefusion_discover_role_references(
+    project_id: str,
+    sample_frames_per_shot: int = 2,
+    cluster_distance_threshold: float = 0.35,
+    source_hint_names: list[str] | None = None,
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+    python_path: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    if not (project_dir / "cast.json").exists():
+        raise ValueError(f"Unknown project_id or missing cast.json: {project_id}")
+    if not (project_dir / "shots.json").exists():
+        raise ValueError(f"Unknown project_id or missing shots.json: {project_id}")
+    discovery = _run_reference_discovery(
+        project_id=project_id,
+        sample_frames_per_shot=sample_frames_per_shot,
+        cluster_distance_threshold=cluster_distance_threshold,
+        source_hint_names=source_hint_names,
+        facefusion_root=facefusion_root,
+        python_path=python_path,
+    )
+    return {
+        **discovery,
+        "project_dir": str(project_dir),
+        "references_path": str(project_dir / "references.json"),
+    }
+
+
+@mcp.tool(description="Apply manual merge and source prefill decisions from discovered reference clusters back into the project state.", structured_output=True)
+def facefusion_apply_reference_decisions(
+    project_id: str,
+    groups: list[dict[str, Any]],
+    overwrite_cast: bool = False,
+    apply_to_empty_shot_roles: bool = True,
+    skip_unassigned_groups: bool = True,
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    if not groups:
+        raise ValueError("groups must not be empty")
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    references_path = project_dir / "references.json"
+    cast_path = project_dir / "cast.json"
+    shots_path = project_dir / "shots.json"
+    references = _read_json(references_path)
+    cast = _read_json(cast_path)
+    shots = _read_json(shots_path)
+    clusters_by_id = {cluster["cluster_id"]: cluster for cluster in references.get("clusters") or []}
+    source_candidates = references.get("source_candidates") or []
+    source_candidates_by_id = {candidate["candidate_id"]: candidate for candidate in source_candidates}
+    merged_roles = []
+    decision_groups = []
+    skipped_groups = []
+    for index, group in enumerate(groups, start=1):
+        cluster_ids = list(group.get("cluster_ids") or [])
+        if not cluster_ids:
+            raise ValueError(f"group[{index}] must include cluster_ids")
+        missing = [cluster_id for cluster_id in cluster_ids if cluster_id not in clusters_by_id]
+        if missing:
+            raise ValueError(f"group[{index}] references unknown clusters: {missing}")
+        suggested_name = group.get("role_name") or group.get("suggested_role_name") or f"Role {index}"
+        role_id = group.get("role_id") or _slugify(suggested_name) or f"role-{index:02d}"
+        source_candidate = None
+        if group.get("source_candidate_id"):
+            source_candidate = source_candidates_by_id.get(group["source_candidate_id"])
+        elif group.get("source_path"):
+            source_candidate = {
+                "candidate_id": f"manual-{index:02d}",
+                "label": Path(group["source_path"]).stem,
+                "source_path": group["source_path"],
+            }
+        else:
+            first_cluster = clusters_by_id[cluster_ids[0]]
+            source_candidate = first_cluster.get("prefill_source_candidate")
+        if not source_candidate or not source_candidate.get("source_path"):
+            if skip_unassigned_groups:
+                skipped_groups.append(
+                    {
+                        "group_id": group.get("group_id") or f"group-{index:02d}",
+                        "cluster_ids": cluster_ids,
+                        "reason": "missing_source_face_path",
+                    }
+                )
+                continue
+            raise ValueError(f"group[{index}] is missing a usable source face path")
+        role_payload = _normalize_role(
+            {
+                "role_id": role_id,
+                "role_name": suggested_name,
+                "source_face_path": source_candidate["source_path"],
+                "source_assets": {"face": source_candidate["source_path"]},
+                "notes": group.get("notes", ""),
+            }
+        )
+        merged_roles.append(role_payload)
+        decision_groups.append(
+            {
+                "group_id": group.get("group_id") or f"group-{index:02d}",
+                "cluster_ids": cluster_ids,
+                "role_id": role_id,
+                "role_name": suggested_name,
+                "source_candidate": source_candidate,
+            }
+        )
+    if overwrite_cast:
+        cast["roles"] = merged_roles
+    else:
+        existing_roles = cast.get("roles") or []
+        existing_by_id = {role["role_id"]: role for role in existing_roles}
+        for role in merged_roles:
+            existing_by_id[role["role_id"]] = role
+        cast["roles"] = list(existing_by_id.values())
+    cluster_to_role_ids: dict[str, str] = {}
+    for group in decision_groups:
+        for cluster_id in group["cluster_ids"]:
+            cluster_to_role_ids[cluster_id] = group["role_id"]
+    for shot in shots.get("shots") or []:
+        detected_clusters = []
+        for summary in references.get("per_shot_summary") or []:
+            if summary["shot_id"] == shot["shot_id"]:
+                detected_clusters = list(summary.get("detected_cluster_ids") or [])
+                break
+        suggested_role_ids = []
+        for cluster_id in detected_clusters:
+            role_id = cluster_to_role_ids.get(cluster_id)
+            if role_id and role_id not in suggested_role_ids:
+                suggested_role_ids.append(role_id)
+        shot["reference_suggested_roles"] = suggested_role_ids
+        if apply_to_empty_shot_roles and not (shot.get("roles") or []):
+            shot["roles"] = list(suggested_role_ids)
+        if apply_to_empty_shot_roles and not (shot.get("operations") or []) and (shot.get("roles") or []):
+            shot["operations"] = [
+                _normalize_operation(
+                    1,
+                    {
+                        "operation_type": "face_swap",
+                        "roles": list(shot["roles"]),
+                        "preview_required": shot.get("preview_required"),
+                    },
+                    list(shot["roles"]),
+                    bool(shot.get("preview_required")),
+                    shot.get("risk_level") or "medium",
+                )
+            ]
+    references["decision_groups"] = decision_groups
+    _write_json(references_path, references)
+    _write_json(cast_path, cast)
+    _write_json(shots_path, shots)
+    return {
+        "project_id": project_id,
+        "references_path": str(references_path),
+        "cast_path": str(cast_path),
+        "shots_path": str(shots_path),
+        "decision_group_count": len(decision_groups),
+        "skipped_group_count": len(skipped_groups),
+        "skipped_groups": skipped_groups,
+        "role_count": len(cast.get("roles") or []),
+        "decision_groups": decision_groups,
+        "cast": cast,
+        "shots": shots,
     }
 
 
@@ -1531,6 +3741,63 @@ def facefusion_build_multi_actor_plan(
     }
 
 
+@mcp.tool(description="Render a standalone HTML visualization for a multi-actor FaceFusion plan.json.", structured_output=True)
+def facefusion_render_plan_ui(
+    project_id: str,
+    output_path: str | None = None,
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    cast_path = project_dir / "cast.json"
+    shots_path = project_dir / "shots.json"
+    plan_path = project_dir / "plan.json"
+    references_path = project_dir / "references.json"
+    cast = _read_json(cast_path)
+    shots = _read_json(shots_path)
+    plan = _read_json(plan_path)
+    references = _read_optional_json(references_path)
+    view_model = _build_plan_view_model(cast, shots, plan, references=references)
+    resolved_output_path = Path(output_path) if output_path else project_dir / "manifests" / "plan-view.html"
+    _ensure_directory(resolved_output_path.parent)
+    resolved_output_path.write_text(_render_plan_html(view_model), encoding="utf-8")
+    return {
+        "project_id": project_id,
+        "plan_path": str(plan_path),
+        "cast_path": str(cast_path),
+        "shots_path": str(shots_path),
+        "references_path": str(references_path) if references_path.exists() else None,
+        "output_path": str(resolved_output_path),
+        "view_model": view_model,
+        "summary": view_model["summary"],
+    }
+
+
+@mcp.tool(description="Render a standalone HTML visualization for discovered reference clusters and source prefills before final multi-actor planning.", structured_output=True)
+def facefusion_render_reference_ui(
+    project_id: str,
+    output_path: str | None = None,
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    references_path = project_dir / "references.json"
+    if not references_path.exists():
+        raise ValueError(f"No references.json found for project_id: {project_id}")
+    references = _read_json(references_path)
+    resolved_output_path = Path(output_path) if output_path else project_dir / "manifests" / "reference-view.html"
+    _ensure_directory(resolved_output_path.parent)
+    resolved_output_path.write_text(_render_reference_html(references), encoding="utf-8")
+    return {
+        "project_id": project_id,
+        "references_path": str(references_path),
+        "output_path": str(resolved_output_path),
+        "references": references,
+        "cluster_count": len(references.get("clusters") or []),
+        "group_count": len(references.get("decision_groups") or references.get("suggested_groups") or []),
+    }
+
+
 @mcp.tool(description="Create FaceFusion jobs and steps from a multi-actor project plan.", structured_output=True)
 def facefusion_materialize_multi_actor_jobs(
     project_id: str,
@@ -1567,42 +3834,62 @@ def facefusion_materialize_multi_actor_jobs(
             "steps_created": [],
         }
     steps_created = []
+    next_job_step_index = 0
     for task in plan["tasks"]:
         if task["task_type"] == "final" and not include_final_tasks:
             continue
         shot = shots_by_id[task["shot_id"]]
-        step_request = _build_task_step_request(task, shot, roles_by_id, overwrite=False)
-        add_result = facefusion_update_job_steps(
-            action="add",
-            job_id=job_id,
-            step_request=step_request,
-            jobs_path=jobs_path,
-            log_level=log_level,
-            facefusion_root=facefusion_root,
-            python_path=python_path,
-        )
+        step_requests = _build_task_step_requests(task, shot, roles_by_id, project_dir, job_id, overwrite=False)
+        add_results = []
+        all_steps_succeeded = True
+        for step_index, step_request in enumerate(step_requests, start=1):
+            add_result = facefusion_update_job_steps(
+                action="add",
+                job_id=job_id,
+                step_request=step_request,
+                jobs_path=jobs_path,
+                log_level=log_level,
+                facefusion_root=facefusion_root,
+                python_path=python_path,
+            )
+            add_results.append(
+                {
+                    "step_index": step_index,
+                    "job_step_index": next_job_step_index,
+                    "step_request": step_request,
+                    "result": add_result,
+                }
+            )
+            next_job_step_index += 1
+            if not add_result["success"]:
+                all_steps_succeeded = False
+                break
         steps_created.append(
             {
                 "task_id": task["task_id"],
                 "task_type": task["task_type"],
-                "result": add_result,
+                "step_count": len(step_requests),
+                "results": add_results,
             }
         )
-        if add_result["success"]:
+        if all_steps_succeeded:
             _set_task_status(
                 task,
                 "materialized",
                 note="Task added to FaceFusion job queue.",
                 materialized_job_id=job_id,
                 last_materialization_success=True,
+                materialized_step_count=len(step_requests),
             )
         else:
+            failed_result = add_results[-1]["result"] if add_results else {}
             _set_task_status(
                 task,
                 "materialize_failed",
-                note=add_result.get("stderr_summary") or add_result.get("stdout_summary") or "Materialization failed.",
+                note=failed_result.get("stderr_summary") or failed_result.get("stdout_summary") or "Materialization failed.",
                 materialized_job_id=job_id,
                 last_materialization_success=False,
+                materialized_step_count=len(add_results),
             )
     _write_json(project_dir / "plan.json", plan)
     manifest_path = project_dir / "manifests" / "materialized-job.json"
@@ -1726,18 +4013,25 @@ def facefusion_retry_failed_task(
         materialization_result = {"create_result": create_result}
         if create_result["success"]:
             shot = shots_by_id[task["shot_id"]]
-            step_request = _build_task_step_request(task, shot, roles_by_id, overwrite=False)
-            add_result = facefusion_update_job_steps(
-                action="add",
-                job_id=retry_job_id,
-                step_request=step_request,
-                jobs_path=jobs_path,
-                log_level=log_level,
-                facefusion_root=facefusion_root,
-                python_path=python_path,
-            )
-            materialization_result["add_result"] = add_result
-            if add_result["success"]:
+            step_requests = _build_task_step_requests(task, shot, roles_by_id, project_dir, retry_job_id, overwrite=False)
+            add_results = []
+            all_steps_succeeded = True
+            for step_request in step_requests:
+                add_result = facefusion_update_job_steps(
+                    action="add",
+                    job_id=retry_job_id,
+                    step_request=step_request,
+                    jobs_path=jobs_path,
+                    log_level=log_level,
+                    facefusion_root=facefusion_root,
+                    python_path=python_path,
+                )
+                add_results.append(add_result)
+                if not add_result["success"]:
+                    all_steps_succeeded = False
+                    break
+            materialization_result["add_results"] = add_results
+            if all_steps_succeeded:
                 _set_task_status(
                     task,
                     "materialized",
@@ -1746,10 +4040,11 @@ def facefusion_retry_failed_task(
                     last_materialization_success=True,
                 )
             else:
+                failed_result = add_results[-1] if add_results else {}
                 _set_task_status(
                     task,
                     "materialize_failed",
-                    note=add_result.get("stderr_summary") or add_result.get("stdout_summary") or "Retry materialization failed.",
+                    note=failed_result.get("stderr_summary") or failed_result.get("stdout_summary") or "Retry materialization failed.",
                     materialized_job_id=retry_job_id,
                     last_materialization_success=False,
                 )
