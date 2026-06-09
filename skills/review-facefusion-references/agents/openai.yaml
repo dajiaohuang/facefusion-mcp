@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review FaceFusion References"
+  short_description: "Merge detected roles and bind sources"
+  default_prompt: "Review detected target roles and source bindings for a multi-actor FaceFusion project"

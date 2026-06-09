@@ -55,6 +55,7 @@ Use this guide when operating as an agent against the local plugin.
 - `facefusion_apply_shot_operation_decisions`
 - `facefusion_render_reference_ui`
 - `facefusion_build_multi_actor_plan`
+- `facefusion_review_multi_actor_configuration`
 - `facefusion_render_plan_ui`
 - `facefusion_materialize_multi_actor_jobs`
 - `facefusion_approve_preview`
@@ -152,10 +153,12 @@ Use this order:
 5. `facefusion_apply_reference_decisions`
 6. `facefusion_apply_shot_operation_decisions` when the user wants optional per-shot pipeline additions such as lip sync, face repair, frame enhancement, background removal, or other non-default operations
 7. `facefusion_build_multi_actor_plan`
-8. `facefusion_render_plan_ui` when the user wants a visual review layer
-9. `facefusion_materialize_multi_actor_jobs`
-10. `facefusion_approve_preview`
-11. `facefusion_retry_failed_task` when needed
+8. `facefusion_review_multi_actor_configuration`
+9. `facefusion_render_plan_ui` when the user wants a visual review layer
+10. Wait for explicit user confirmation of the full configuration
+11. `facefusion_materialize_multi_actor_jobs`
+12. `facefusion_approve_preview`
+13. `facefusion_retry_failed_task` when needed
 
 Treat the project as three persisted layers:
 
@@ -189,6 +192,8 @@ Recommended order:
 9. ask whether any shot also needs optional pipeline operations such as `lip_sync`, `face_enhance`, `frame_enhance`, `background_remove`, `expression_restore`, `face_edit`, `age_modify`, or `frame_colorize`
 10. if yes, call `facefusion_apply_shot_operation_decisions`
 11. only then build `plan.json`
+12. call `facefusion_review_multi_actor_configuration` and return the full settings for confirmation
+13. only after explicit confirmation may you materialize or run swap jobs
 
 UI-mode default:
 
@@ -214,6 +219,11 @@ What the agent should ask next:
 - "Should any of these detected clusters be merged into one role?"
 - "For each merged role, keep the prefilled target face or switch to another source face?"
 - "Which detected roles still need a source image?"
+
+What the agent should ask before execution:
+
+- "Here is the full configuration I am about to run. Do you confirm these merge decisions, source images, shot ranges, optional operations, preview settings, and final quality settings?"
+- "Should I proceed to preview generation now?"
 
 OpenClaw or remote-image case:
 
@@ -252,6 +262,26 @@ When the user says something like:
 - "add frame enhance to these three shots"
 
 use `facefusion_apply_shot_operation_decisions` before building the final plan.
+
+## Pre-Execution Confirmation Gate
+
+Before any preview or final face-swap execution, always insert one explicit confirmation gate.
+
+Use `facefusion_review_multi_actor_configuration` to return:
+
+- current merged roles
+- source paths bound to each role
+- shot ranges and role assignments
+- per-shot optional operations
+- preview mode and quality profile
+- any unresolved items that still block execution
+
+Rules:
+
+- Do not go straight from source assignment to `facefusion_materialize_multi_actor_jobs`.
+- Do not assume that user-provided source images imply approval to run.
+- Treat "use this source for that role" as configuration input, not execution approval.
+- Wait for a clear confirmation such as "confirm", "run preview", or "proceed".
 
 ## Multi-Actor Operation Model
 

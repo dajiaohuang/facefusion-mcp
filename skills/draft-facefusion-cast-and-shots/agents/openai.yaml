@@ -1,0 +1,4 @@
+interface:
+  display_name: "Draft FaceFusion Cast/Shots"
+  short_description: "Create the first multi-actor project draft"
+  default_prompt: "Draft the cast and shots for a multi-actor FaceFusion project"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refine FaceFusion Plan"
+  short_description: "Add shot ops, build plan, approve previews"
+  default_prompt: "Refine the plan for a multi-actor FaceFusion project"

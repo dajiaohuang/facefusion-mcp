@@ -287,6 +287,50 @@ def _default_ui_mode() -> bool:
     return bool(env_config.get("default_ui_mode"))
 
 
+def _merge_deep_dict(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
+    merged = dict(base or {})
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_deep_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _default_multi_actor_defaults() -> dict[str, Any]:
+    env_config = _read_env_config()
+    payload = env_config.get("multi_actor_defaults")
+    if not isinstance(payload, dict):
+        return {"default_shot_operations": [], "operation_defaults": {}}
+    default_shot_operations = payload.get("default_shot_operations")
+    operation_defaults = payload.get("operation_defaults")
+    return {
+        "default_shot_operations": list(default_shot_operations or []),
+        "operation_defaults": dict(operation_defaults or {}),
+    }
+
+
+def _multi_actor_operation_defaults(operation_type: str) -> dict[str, Any]:
+    defaults = _default_multi_actor_defaults()
+    operation_defaults = defaults.get("operation_defaults") or {}
+    payload = operation_defaults.get(operation_type)
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "processors": list(payload.get("processors") or []),
+        "processor_options": dict(payload.get("processor_options") or {}),
+        "face_options": dict(payload.get("face_options") or {}),
+        "output_options": dict(payload.get("output_options") or {}),
+        "misc_options": dict(payload.get("misc_options") or {}),
+        "extra_args": list(payload.get("extra_args") or []),
+    }
+
+
+def _default_shot_operations() -> list[str]:
+    defaults = _default_multi_actor_defaults()
+    return [str(item) for item in (defaults.get("default_shot_operations") or []) if item]
+
+
 def _read_named_defaults(bucket_name: str, name: str) -> dict[str, Any]:
     bucket = _read_env_config().get(bucket_name)
     if not isinstance(bucket, dict):
@@ -1130,6 +1174,7 @@ def _normalize_operation(
     if operation_type not in MULTI_ACTOR_OPERATION_PROFILES:
         raise ValueError(f"Unsupported operation_type: {operation_type}")
     profile = MULTI_ACTOR_OPERATION_PROFILES[operation_type]
+    default_payload = _multi_actor_operation_defaults(operation_type)
     if "roles" in operation:
         roles = list(operation.get("roles") or [])
     elif profile["roles_required"]:
@@ -1155,14 +1200,14 @@ def _normalize_operation(
         "operation_id": operation_id,
         "operation_type": operation_type,
         "roles": roles,
-        "processors": operation.get("processors"),
+        "processors": operation.get("processors") or default_payload.get("processors"),
         "source_asset_kind": operation.get("source_asset_kind") or profile.get("source_asset_kind"),
         "source_paths_override": operation.get("source_paths_override"),
-        "processor_options": operation.get("processor_options") or {},
-        "face_options": operation.get("face_options") or {},
-        "output_options": operation.get("output_options") or {},
-        "misc_options": operation.get("misc_options") or {},
-        "extra_args": operation.get("extra_args") or [],
+        "processor_options": _merge_option_dict(default_payload.get("processor_options"), operation.get("processor_options")),
+        "face_options": _merge_option_dict(default_payload.get("face_options"), operation.get("face_options")),
+        "output_options": _merge_option_dict(default_payload.get("output_options"), operation.get("output_options")),
+        "misc_options": _merge_option_dict(default_payload.get("misc_options"), operation.get("misc_options")),
+        "extra_args": _merge_list(default_payload.get("extra_args"), operation.get("extra_args")),
         "preview_required": bool(preview_required),
         "risk_level": operation.get("risk_level") or shot_risk_level,
         "notes": operation.get("notes", ""),
@@ -1289,6 +1334,20 @@ def _shot_operation_decision_to_operations(
         )
         next_index += 1
     return operations
+
+
+def _apply_default_shot_operations_to_shot(shot: dict[str, Any]) -> None:
+    default_operations = _default_shot_operations()
+    if not default_operations:
+        return
+    current_non_swap = [
+        operation.get("operation_type")
+        for operation in (shot.get("operations") or [])
+        if operation.get("operation_type") != "face_swap"
+    ]
+    if current_non_swap:
+        return
+    shot["operations"] = _shot_operation_decision_to_operations(shot, default_operations)
 
 
 def _coerce_frame_bound(value: Any) -> int:
@@ -1771,6 +1830,109 @@ def _build_plan_view_model(
         "shots": shot_list,
         "tasks": task_cards,
         "references": references or {},
+    }
+
+
+def _build_multi_actor_confirmation_summary(
+    project_id: str,
+    project_dir: Path,
+    cast: dict[str, Any],
+    shots: dict[str, Any],
+    references: dict[str, Any] | None,
+    plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    roles = cast.get("roles") or []
+    shot_list = shots.get("shots") or []
+    decision_groups = (references or {}).get("decision_groups") or []
+    tasks = (plan or {}).get("tasks") or []
+    role_names = {role["role_id"]: role.get("role_name") or role["role_id"] for role in roles}
+    unresolved_roles = []
+    for role in roles:
+        source_face_path = role.get("source_face_path") or (role.get("source_assets") or {}).get("face")
+        if not source_face_path:
+            unresolved_roles.append(role["role_id"])
+
+    shot_summaries = []
+    for shot in shot_list:
+        operations = shot.get("operations") or []
+        shot_summaries.append(
+            {
+                "shot_id": shot["shot_id"],
+                "target_path": shot["target_path"],
+                "frame_start": shot.get("frame_start"),
+                "frame_end": shot.get("frame_end"),
+                "trim_start": shot.get("trim_start"),
+                "trim_end": shot.get("trim_end"),
+                "roles": list(shot.get("roles") or []),
+                "role_names": [role_names.get(role_id, role_id) for role_id in (shot.get("roles") or [])],
+                "preview_required": bool(shot.get("preview_required")),
+                "risk_level": shot.get("risk_level"),
+                "notes": shot.get("notes", ""),
+                "operations": [
+                    {
+                        "operation_id": operation.get("operation_id"),
+                        "operation_type": operation.get("operation_type"),
+                        "roles": list(operation.get("roles") or []),
+                        "processors": list(operation.get("processors") or []),
+                        "processor_options": operation.get("processor_options") or {},
+                        "face_options": operation.get("face_options") or {},
+                        "output_options": operation.get("output_options") or {},
+                        "misc_options": operation.get("misc_options") or {},
+                        "extra_args": list(operation.get("extra_args") or []),
+                    }
+                    for operation in operations
+                ],
+            }
+        )
+
+    task_counts = {
+        "preview": len([task for task in tasks if task.get("task_type") == "preview"]),
+        "final": len([task for task in tasks if task.get("task_type") == "final"]),
+    }
+    task_status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = task.get("status") or "unknown"
+        task_status_counts[status] = task_status_counts.get(status, 0) + 1
+
+    ready_for_execution = bool(tasks) and not unresolved_roles
+    return {
+        "project_id": project_id,
+        "project_dir": str(project_dir),
+        "cast_path": str(project_dir / "cast.json"),
+        "shots_path": str(project_dir / "shots.json"),
+        "references_path": str(project_dir / "references.json") if references is not None else None,
+        "plan_path": str(project_dir / "plan.json") if plan is not None else None,
+        "roles": [
+            {
+                "role_id": role["role_id"],
+                "role_name": role.get("role_name") or role["role_id"],
+                "source_face_path": role.get("source_face_path"),
+                "source_audio_path": role.get("source_audio_path"),
+                "source_assets": role.get("source_assets") or {},
+                "notes": role.get("notes", ""),
+            }
+            for role in roles
+        ],
+        "decision_groups": [
+            {
+                "group_id": group.get("group_id"),
+                "cluster_ids": list(group.get("cluster_ids") or []),
+                "role_id": group.get("role_id"),
+                "role_name": group.get("role_name"),
+                "source_path": (group.get("source_candidate") or {}).get("source_path"),
+            }
+            for group in decision_groups
+        ],
+        "shots": shot_summaries,
+        "plan_overview": {
+            "preview_mode": (plan or {}).get("preview_mode"),
+            "quality_profile": (plan or {}).get("quality_profile"),
+            "task_counts": task_counts,
+            "task_status_counts": task_status_counts,
+        } if plan is not None else None,
+        "unresolved_roles": unresolved_roles,
+        "ready_for_execution": ready_for_execution,
+        "confirmation_required_before_materialize": True,
     }
 
 
@@ -2353,6 +2515,8 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     .op-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }}
     .op-toggle {{ display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.78); }}
     .op-toggle input {{ margin-top: 3px; }}
+    .default-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }}
+    .checkbox-stack {{ display: grid; gap: 8px; }}
     .dropzone {{
       padding: 14px;
       border: 1.5px dashed rgba(177,77,36,0.35);
@@ -2435,6 +2599,10 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
           <div class="facts" id="validationFacts"></div>
         </article>
         <article class="card">
+          <h2>Defaults</h2>
+          <p class="sub">Default extra operations, models, and face-selection settings are still applied here as prefills, but editing defaults from the UI is temporarily disabled. Change them through <code>facefusion.env.json</code>, the CLI/tool layer, or the agent.</p>
+        </article>
+        <article class="card">
           <h2>Source Candidates</h2>
           <div class="dropzone" id="sourceLibraryDropzone">Drop face image files here to add source candidates to the library.</div>
           <div class="catalog" id="sourceCatalog"></div>
@@ -2447,6 +2615,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
     const clusters = view.clusters || [];
     const shots = view.shots || [];
     const sourceCandidates = view.source_candidates || [];
+    const defaultMultiActorDefaults = view.multi_actor_defaults || {{ default_shot_operations: [], operation_defaults: {{}} }};
     const shotOperationCatalog = [
       {{ operation_type: "lip_sync", label: "Lip Sync", description: "Adds lip-sync operations. Multi-role shots expand into one speaking-role task per role.", role_mode: "per_role" }},
       {{ operation_type: "face_enhance", label: "Face Repair", description: "Adds a face enhancement cleanup pass for the shot.", role_mode: "global" }},
@@ -2490,7 +2659,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       }}, index)),
       manualSourceCandidates: [],
       shotOperations: (shots || []).map((shot) => {{
-        const enabled = new Set();
+        const enabled = new Set(defaultMultiActorDefaults.default_shot_operations || []);
         (shot.operations || []).forEach((operation) => {{
           if ((operation.operation_type || "") !== "face_swap") {{
             enabled.add(operation.operation_type);
@@ -3180,6 +3349,7 @@ def _render_reference_html(reference_view: dict[str, Any]) -> str:
       state.manualSourceCandidates = [];
       syncRawEditor();
       renderGroups();
+      renderShotOperations();
       renderSourceCatalog();
       setStatus("Reset editor state back to the suggested groups.");
     }});
@@ -3340,6 +3510,29 @@ def facefusion_list_presets() -> dict[str, Any]:
     return {
         "preset_count": len(PRESET_LIBRARY),
         "presets": PRESET_LIBRARY,
+    }
+
+
+@mcp.tool(description="Update persistent plugin defaults in facefusion.env.json, including multi-actor default extra operations and default model or face-selection settings.", structured_output=True)
+def facefusion_update_multi_actor_defaults(
+    default_shot_operations: list[str] | None = None,
+    operation_defaults: dict[str, Any] | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    env_config = _read_env_config()
+    current = _default_multi_actor_defaults()
+    next_defaults: dict[str, Any] = {}
+    if default_shot_operations is not None:
+        next_defaults["default_shot_operations"] = list(default_shot_operations)
+    if operation_defaults is not None:
+        next_defaults["operation_defaults"] = dict(operation_defaults)
+    merged = next_defaults if replace else _merge_deep_dict(current, next_defaults)
+    env_config["multi_actor_defaults"] = merged
+    _write_env_config(env_config)
+    return {
+        "success": True,
+        "env_config_path": str(ENV_CONFIG_PATH),
+        "multi_actor_defaults": merged,
     }
 
 
@@ -4642,6 +4835,8 @@ def facefusion_apply_reference_decisions(
                     shot.get("risk_level") or "medium",
                 )
             ]
+        if not _default_ui_mode():
+            _apply_default_shot_operations_to_shot(shot)
     references["decision_groups"] = decision_groups
     _write_json(references_path, references)
     _write_json(cast_path, cast)
@@ -4835,6 +5030,29 @@ def facefusion_render_plan_ui(
     }
 
 
+@mcp.tool(description="Return the full current multi-actor project configuration for user confirmation before materializing or running any swap job.", structured_output=True)
+def facefusion_review_multi_actor_configuration(
+    project_id: str,
+    project_root: str | None = None,
+    facefusion_root: str | None = None,
+) -> dict[str, Any]:
+    project_dir = _project_dir(project_id, project_root=project_root, facefusion_root=facefusion_root)
+    cast_path = project_dir / "cast.json"
+    shots_path = project_dir / "shots.json"
+    references_path = project_dir / "references.json"
+    plan_path = project_dir / "plan.json"
+    if not cast_path.exists():
+        raise ValueError(f"Unknown project_id or missing cast.json: {project_id}")
+    if not shots_path.exists():
+        raise ValueError(f"Unknown project_id or missing shots.json: {project_id}")
+    cast = _read_json(cast_path)
+    shots = _read_json(shots_path)
+    references = _read_optional_json(references_path)
+    plan = _read_optional_json(plan_path)
+    summary = _build_multi_actor_confirmation_summary(project_id, project_dir, cast, shots, references, plan)
+    return summary
+
+
 @mcp.tool(description="Render a standalone HTML visualization for discovered reference clusters and source prefills before final multi-actor planning.", structured_output=True)
 def facefusion_render_reference_ui(
     project_id: str,
@@ -4850,6 +5068,13 @@ def facefusion_render_reference_ui(
     shots_path = project_dir / "shots.json"
     if shots_path.exists():
         references = {**references, "shots": (_read_json(shots_path).get("shots") or [])}
+    references = {
+        **references,
+        "multi_actor_defaults": _default_multi_actor_defaults(),
+        "default_choices": _available_choice_catalog(facefusion_root=facefusion_root, python_path=None),
+        "current_env_config": _read_env_config(),
+        "env_config_path": str(ENV_CONFIG_PATH),
+    }
     resolved_output_path = Path(output_path) if output_path else project_dir / "manifests" / "reference-view.html"
     _ensure_directory(resolved_output_path.parent)
     resolved_output_path.write_text(_render_reference_html(references), encoding="utf-8")

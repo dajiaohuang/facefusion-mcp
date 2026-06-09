@@ -15,6 +15,16 @@ FaceFusion MCP is built for more than one-off swaps. Its standout workflow is co
 
 This makes it practical for an agent to coordinate multi-role, multi-face projects with a `cast -> shots -> preview -> approval -> retry` loop instead of forcing users to hand-author large FaceFusion command lines.
 
+Before any preview or final face-swap execution, the intended agent flow should return the full planned configuration for confirmation first:
+
+- merged role decisions
+- source images bound to each role
+- shot ranges and role assignments
+- optional shot-level pipeline operations
+- preview mode and final quality profile
+
+Only after the user confirms that full configuration should the agent materialize or run swap jobs.
+
 After `plan.json` is generated, the plugin can also render a standalone HTML plan viewer so the queue is easy to inspect in a browser before previews are approved or finals are promoted.
 
 It can also detect when FaceFusion is not installed or not fully set up yet, then propose an install/setup plan and only execute it after explicit confirmation.
@@ -41,6 +51,7 @@ It can also detect when FaceFusion is not installed or not fully set up yet, the
   - multi-actor cast definition
   - multi-actor shot planning
   - multi-actor plan building
+  - multi-actor configuration review before execution
   - multi-actor plan visualization
   - multi-actor job materialization
   - preview approval
@@ -184,6 +195,7 @@ The Python environment is created inside the chosen install root at:
 - `facefusion_define_cast`
 - `facefusion_plan_shots`
 - `facefusion_build_multi_actor_plan`
+- `facefusion_review_multi_actor_configuration`
 - `facefusion_render_plan_ui`
 - `facefusion_materialize_multi_actor_jobs`
 - `facefusion_approve_preview`
@@ -307,6 +319,8 @@ Explicit request fields override preset defaults.
 ## Plan Viewer
 
 For multi-actor projects, once `facefusion_build_multi_actor_plan` writes `plan.json`, you can call `facefusion_render_plan_ui`.
+
+Before materializing or running that plan, call `facefusion_review_multi_actor_configuration` and show the resulting summary to the user for confirmation.
 
 It reads:
 
