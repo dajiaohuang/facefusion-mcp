@@ -2,6 +2,8 @@
 
 MCP server and Codex plugin for driving a local [FaceFusion](https://github.com/facefusion/facefusion) installation through tools, resources, and prompts, with a strong focus on both headless execution and interactive UI launch, broader FaceFusion capability exposure, reusable presets, conversational multi-actor and multi-face orchestration, plan visualization, preview approval, shot-level retry workflows, and confirmation-gated install/setup when FaceFusion is missing.
 
+This repository is the execution layer. If you want the reusable phase-based multi-actor conversation flow as a separate package, pair it with [Facefusion MultiActor Skills](https://github.com/dajiaohuang/facefusion-multiactor-skills).
+
 ## Featured Workflow
 
 FaceFusion MCP is built for more than one-off swaps. Its standout workflow is conversational multi-actor orchestration:
@@ -124,6 +126,79 @@ $env:FACEFUSION_ROOT="D:\facefusion-3.6.1"
 $env:FACEFUSION_PYTHON="D:\facefusion-3.6.1\.venv\Scripts\python.exe"
 python .\scripts\server.py --stdio
 ```
+
+## Install In Codex
+
+This repo is a native Codex plugin.
+
+1. Clone or copy this repository into your Codex plugins directory.
+2. Confirm `.codex-plugin/plugin.json` and `.mcp.json` stay together.
+3. Set either:
+   - `FACEFUSION_ROOT`
+   - `FACEFUSION_PYTHON`
+   - or `facefusion.env.json` in the plugin root
+4. Restart Codex or reload plugins.
+5. Ask Codex to run `facefusion_health_check`.
+
+If FaceFusion is not installed yet, the plugin can propose install/setup and only continue after confirmation.
+
+## Install In OpenClaw
+
+Use this repo as an MCP server plus instruction pack.
+
+1. Clone this repo somewhere stable on the machine that will run FaceFusion.
+2. Make sure Python can run `scripts/server.py` and that the `mcp` package is installed.
+3. Set `FACEFUSION_ROOT` and `FACEFUSION_PYTHON`, or create `facefusion.env.json` in this repo.
+4. Register an MCP server in OpenClaw that launches:
+
+```powershell
+python D:\facefusion-3.6.1\plugins\facefusion-local\scripts\server.py --stdio
+```
+
+5. Expose the repo's workflow guidance to the agent, usually by attaching:
+   - `AGENT.md`
+   - `skills/coordinate-multi-actor-facefusion/`
+   - the related reference files
+6. Start with `facefusion_health_check` before any run request.
+
+## Install In Hermes
+
+Hermes should use this repo the same way as any external MCP-capable agent runtime.
+
+1. Clone the repository on the worker machine.
+2. Configure Hermes to launch the stdio MCP server:
+
+```powershell
+python D:\facefusion-3.6.1\plugins\facefusion-local\scripts\server.py --stdio
+```
+
+3. Pass through the FaceFusion environment variables or maintain them in `facefusion.env.json`.
+4. Add the repo's workflow instructions as the agent's project or system guidance so it knows:
+   - when to ask for confirmation
+   - how to use the multi-actor workflow
+   - when to prefer queue-based execution
+5. Validate the connection with `facefusion_health_check`.
+
+## Install In Claude
+
+For Claude, separate the MCP connection from the workflow instructions.
+
+1. Clone this repo on the same machine that hosts FaceFusion.
+2. Add an MCP server entry in your Claude runtime that starts:
+
+```powershell
+python D:\facefusion-3.6.1\plugins\facefusion-local\scripts\server.py --stdio
+```
+
+3. Provide `FACEFUSION_ROOT` and `FACEFUSION_PYTHON` through environment variables or `facefusion.env.json`.
+4. Copy the repo's workflow instructions into Claude's project instructions or shared prompt context. The most important files are:
+   - `AGENT.md`
+   - `skills/coordinate-multi-actor-facefusion/SKILL.md`
+   - `skills/review-facefusion-references/SKILL.md`
+   - `skills/refine-facefusion-plan/SKILL.md`
+5. Ask Claude to run `facefusion_health_check`.
+
+Claude can use the MCP tools directly, but the Codex `SKILL.md` format is not a native Claude feature. Treat the skills as reusable instruction documents.
 
 ## If FaceFusion Is Missing
 
@@ -339,6 +414,20 @@ The generated page shows:
 - task cards for previews and finals
 - status, processors, risk, provider, and output-path summaries
 - quick filtering by task type and status
+
+## Pairing With Facefusion MultiActor Skills
+
+The clean split is:
+
+- this repo: executable MCP tools, resources, prompts, install/setup, queueing, plan rendering, runtime defaults
+- `facefusion-multiactor-skills`: reusable multi-actor conversation flow and phase guidance
+
+Recommended pairing:
+
+1. Install this repo wherever the agent can reach the local FaceFusion runtime.
+2. Install or copy the multi-actor skills repo into the same agent environment.
+3. Use the skills repo to drive phase-by-phase decisions.
+4. Use this repo to execute every real action through MCP tools.
 
 ## Resources
 
